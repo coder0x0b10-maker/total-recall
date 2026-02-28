@@ -40,7 +40,7 @@ Layer 5: Pre-compaction hook (memoryFlush)
 
 ## What It Does
 
-- **Observer** reads recent session transcripts (JSONL), sends them to an LLM (Gemini Flash), and appends compressed observations to `observations.md` with priority levels (🔴 high, 🟡 medium, 🟢 low)
+- **Observer** reads recent session transcripts (JSONL), sends them to an LLM, and appends compressed observations to `observations.md` with priority levels (high, medium, low)
 - **Reflector** kicks in when observations grow too large, consolidating related items and dropping stale low-priority entries
 - **Session Recovery** runs at session start, checks if the previous session was captured, and does an emergency observation if not
 - **Reactive Watcher** watches the session directory with inotify so high-activity periods get captured faster than the cron interval
@@ -53,7 +53,7 @@ Layer 5: Pre-compaction hook (memoryFlush)
 clawdhub install total-recall
 ```
 
-### 2. Set your OpenRouter API key
+### 2. Set your API key
 Add to your `.env` or OpenClaw config:
 ```bash
 OPENROUTER_API_KEY=sk-or-v1-xxxxx
@@ -82,10 +82,10 @@ Or use OpenClaw's `memoryFlush.systemPrompt` to inject a startup instruction.
 
 | Platform | Observer + Reflector + Recovery | Reactive Watcher |
 |----------|-------------------------------|-----------------|
-| Linux (Debian/Ubuntu/etc.) | ✅ Full support | ✅ With inotify-tools |
-| macOS | ✅ Full support | ❌ Not available (cron-only) |
+| Linux (Debian/Ubuntu/etc.) | Full support | With inotify-tools |
+| macOS | Full support | Not available (cron-only) |
 
-All core scripts use portable bash — `stat`, `date`, and `md5` commands are handled cross-platform via `_compat.sh`.
+All core scripts use portable bash. `stat`, `date`, and `md5` commands are handled cross-platform via `_compat.sh`.
 
 ## Configuration
 
@@ -96,14 +96,41 @@ All scripts read from environment variables with sensible defaults:
 | `OPENROUTER_API_KEY` | (required) | OpenRouter API key for LLM calls |
 | `MEMORY_DIR` | `$OPENCLAW_WORKSPACE/memory` | Where observations.md lives |
 | `SESSIONS_DIR` | `~/.openclaw/agents/main/sessions` | OpenClaw session transcripts |
-| `OBSERVER_MODEL` | `google/gemini-2.5-flash` | Primary model for compression |
-| `OBSERVER_FALLBACK_MODEL` | `google/gemini-2.0-flash-001` | Fallback if primary fails |
+| `OBSERVER_MODEL` | `deepseek/deepseek-v3.2` | Primary model for compression |
+| `OBSERVER_FALLBACK_MODEL` | `google/gemini-2.5-flash` | Fallback if primary fails |
 | `OBSERVER_LOOKBACK_MIN` | `15` | Minutes to look back (daytime) |
 | `OBSERVER_MORNING_LOOKBACK_MIN` | `480` | Minutes to look back (before 8am) |
 | `OBSERVER_LINE_THRESHOLD` | `40` | Lines before reactive trigger (Linux) |
 | `OBSERVER_COOLDOWN_SECS` | `300` | Cooldown between reactive triggers (Linux) |
 | `REFLECTOR_WORD_THRESHOLD` | `8000` | Words before reflector runs |
 | `OPENCLAW_WORKSPACE` | `~/your-workspace` | Workspace root |
+
+## LLM Provider Configuration
+
+Total Recall uses any OpenAI-compatible chat completion API. Switch providers by setting environment variables:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `LLM_BASE_URL` | `https://openrouter.ai/api/v1` | API endpoint |
+| `LLM_API_KEY` | falls back to `OPENROUTER_API_KEY` | API key |
+| `LLM_MODEL` | `deepseek/deepseek-v3.2` | Model to use |
+
+### Provider examples
+
+```bash
+# OpenRouter (default)
+export OPENROUTER_API_KEY="your-key"
+
+# Ollama (local)
+export LLM_BASE_URL="http://localhost:11434/v1"
+export LLM_API_KEY="ollama"
+export LLM_MODEL="llama3.1:8b"
+
+# Groq
+export LLM_BASE_URL="https://api.groq.com/openai/v1"
+export LLM_API_KEY="your-groq-key"
+export LLM_MODEL="llama-3.3-70b-versatile"
+```
 
 ## Files Created
 
@@ -131,9 +158,7 @@ The setup script creates these OpenClaw cron jobs:
 
 ## Reactive Watcher (Linux only)
 
-The reactive watcher uses `inotifywait` to detect session activity and trigger the observer faster than cron alone. It requires Linux with `inotify-tools` installed.
-
-On macOS, the watcher is not available — the 15-minute cron provides full coverage.
+The reactive watcher uses `inotifywait` to detect session activity and trigger the observer faster than cron alone. Requires Linux with `inotify-tools` installed.
 
 ```bash
 # Install inotify-tools (Debian/Ubuntu)
@@ -148,8 +173,8 @@ journalctl --user -u total-recall-watcher -f
 
 ## Cost
 
-Using Gemini 2.5 Flash via OpenRouter:
-- ~$0.05-0.15/month for typical usage (observer + reflector)
+Using DeepSeek v3.2 via OpenRouter:
+- ~$0.03-0.10/month for typical usage (observer + reflector)
 - ~15-30 cron runs/day, each processing a few hundred tokens
 
 ## How It Works (Technical)
@@ -161,7 +186,7 @@ Using Gemini 2.5 Flash via OpenRouter:
 4. Deduplicates using MD5 hash comparison
 5. Sends to LLM with the observer prompt (priority-based compression)
 6. Appends result to `observations.md`
-7. If observations > word threshold, triggers reflector
+7. If observations exceed the word threshold, triggers reflector
 
 ### Reflector
 1. Backs up current observations
@@ -181,7 +206,7 @@ Using Gemini 2.5 Flash via OpenRouter:
 1. Uses `inotifywait` to monitor session directory
 2. Counts JSONL writes to main session files only
 3. After 40+ lines: triggers observer (with 5-min cooldown)
-4. Resets counter when cron/external observer runs detected
+4. Resets counter when cron/external observer runs are detected
 
 ## Customizing the Prompts
 
@@ -197,48 +222,49 @@ Edit these to match your agent's personality and priorities.
 
 The Dream Cycle is an optional nightly agent that runs after hours to consolidate `observations.md`. It archives stale items and adds semantic hooks so nothing useful is actually lost. Context stays lean; everything remains findable.
 
-**Status: Phase 2 COMPLETE as of 28 Feb 2026. All 6 work packages live and validated.**
-
 ### What It Does
 
 - Classifies every observation by impact (critical / high / medium / low / minimal) and age
 - Archives items that have passed their relevance threshold
 - Adds a semantic hook for each archived item (specific keywords + archive reference)
-- Validates the result; rolls back automatically if something goes wrong
+- Validates the result and rolls back automatically if something goes wrong
+
+### Features
+
+**Multi-Hook Retrieval** — 4-5 alternative search phrasings per archived item. Searches using different words than the original still find the memory.
+
+**Confidence Scoring** — every observation gets a confidence score (0.0-1.0) and source type (`explicit`, `implicit`, `inference`, `weak`, `uncertain`). High-confidence items are preserved longer; low-confidence items are archived sooner.
+
+**Memory Type System** — 7 types with per-type TTLs: `event` (14d), `fact` (90d), `preference` (180d), `goal` (365d), `habit` (365d), `rule` (never), `context` (30d). Embedded as invisible HTML metadata comments in `observations.md`.
+
+**Observation Chunking** — clusters of 3+ related observations are compressed into single summary entries. Source observations are archived; a chunk hook replaces them. Achieves up to 75% token reduction.
+
+**Importance Decay** — per-type daily decay applied to importance scores before each archival decision. Items that decay below the archive threshold are queued for removal. Rates: `event` (-0.5/day), `fact` (-0.1/day), `preference` (-0.02/day), `rule`/`habit`/`goal` (no decay).
+
+**Pattern Promotion** — scans recent dream logs for recurring themes (3+ occurrences across 3+ separate days). Writes promotion proposals to `memory/dream-staging/` for human review. Use `staging-review.sh` to list, show, approve, or reject proposals. The `context` type is never promoted automatically.
 
 ### Setup
 
-1. **Run setup** — setup.sh creates the required Dream Cycle directories automatically.
+1. Run `bash skills/total-recall/scripts/setup.sh` — creates Dream Cycle directories automatically.
 
-2. **Add the nightly cron job:**
+2. Add the nightly cron job:
    ```
    # Dream Cycle — nightly at 3am
    0 3 * * * OPENCLAW_WORKSPACE=~/your-workspace bash ~/your-workspace/skills/total-recall/scripts/dream-cycle.sh preflight
    ```
 
-3. **Configure your cron agent** — use `prompts/dream-cycle-prompt.md` as the system prompt for the nightly agent. Models: Claude Sonnet for the Dreamer (analysis + decisions), Gemini Flash for the Observer (cheap, fast).
+3. Configure your cron agent using `prompts/dream-cycle-prompt.md` as the system prompt. Recommended models: Claude Sonnet for the Dreamer (analysis + decisions), DeepSeek v3.2 for the Observer (cheap, fast).
 
-4. **Dry run first** — set `READ_ONLY_MODE=true` in your cron agent payload for the first 2-3 nights. Check `memory/dream-logs/` after each run to verify what it would have archived.
+4. Start with `READ_ONLY_MODE=true` for the first few nights. Check `memory/dream-logs/` after each run to verify what it would have archived.
 
-5. **Go live** — switch to `READ_ONLY_MODE=false` once satisfied.
+5. Switch to `READ_ONLY_MODE=false` once satisfied.
 
 ### Configuration
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `DREAM_TOKEN_TARGET` | `8000` | Token target for observations.md after consolidation |
-| `DREAM_PHASE` | (unset = 1) | Feature phase: Phase 2 is live (WP0/WP0.5/WP1). Phase 2 adds multi-hook, confidence scoring, type classification. |
 | `READ_ONLY_MODE` | `false` | Set `true` for dry-run analysis without writes |
-
-### Results (3 Nights)
-
-| Night | Mode | Before | After | Reduction | Archived |
-|-------|------|--------|-------|-----------|----------|
-| Night 1 | Dry run | 9,445 tokens | 8,309 tokens | 12% | 53 items |
-| Night 2 | Dry run | 16,900 tokens | 6,800 tokens | 60% | 248 items |
-| Night 3 | Live | 11,688 tokens | 2,930 tokens | 75% | 15 items, 0 false archives |
-
-Cost per run: ~$0.003.
 
 ### Files
 
@@ -247,7 +273,7 @@ Cost per run: ~$0.003.
 | `scripts/dream-cycle.sh` | Shell helper: preflight, archive, update-observations, write-log, write-metrics, validate, rollback |
 | `prompts/dream-cycle-prompt.md` | Agent prompt for the nightly Dream Cycle run |
 | `dream-cycle/README.md` | Dream Cycle quick reference |
-| `schemas/observation-format.md` | Extended observation format for Phase 2 type classification |
+| `schemas/observation-format.md` | Extended observation metadata format |
 
 ### Directories Created
 
@@ -255,60 +281,39 @@ Cost per run: ~$0.003.
 memory/
   archive/
     observations/        # Archived items (one .md file per night)
+    chunks/              # Chunked observation groups
   dream-logs/            # Nightly run reports
+  dream-staging/         # Pattern promotion proposals awaiting human review
   .dream-backups/        # Pre-run safety backups
 research/
   dream-cycle-metrics/
     daily/               # JSON metrics per night
 ```
 
-### Phase 2+ Roadmap
+---
 
-*Updated: 2026-02-28 — Phase 2 complete, all work packages live.*
+## Troubleshooting
 
-**Key insight from research:** Agent capability to use retrieval tools matters more than the retrieval mechanism itself. Simple filesystem tools often beat fancy memory frameworks. This validates our markdown-based approach.
+**Observer not running?**
+- Check `logs/observer.log` for errors
+- Verify `OPENROUTER_API_KEY` is set and valid
+- Confirm cron is active: `crontab -l`
 
-**Rollout approach:** Dry-run-overnight + morning-review + immediate-live. The 7-day plan was compressed to 5 days. Full Phase 2 completed 28 Feb 2026, one day ahead of the 1 Mar target.
+**Observations not being loaded at session start?**
+- Ensure your agent's startup instructions include reading `memory/observations.md`
+- Check `MEMORY_DIR` points to the right location
 
-| Phase | Focus | Status |
-|-------|-------|--------|
-| **Phase 1** | Archive & trim, semantic hooks | ✅ LIVE |
-| **Phase 2 — WP0** | Multi-hook generation (4-5 search phrasings per archive) | ✅ LIVE (25 Feb) |
-| **Phase 2 — WP0.5** | Confidence metadata (0.0-1.0 score + source attribution) | ✅ LIVE (25 Feb) |
-| **Phase 2 — WP1** | Type system — 7 memory types + TTL classification | ✅ LIVE (25 Feb) |
-| **Phase 2 — WP3** | Chunking — compress related observations into single entries | ✅ LIVE (26 Feb) |
-| **Phase 2 — WP2** | Importance decay — per-type daily decay curves | ✅ LIVE (28 Feb 2026) |
-| **Phase 2 — WP4** | Pattern promotion pipeline — staging proposals for human review | ✅ LIVE (28 Feb 2026) |
-| **Full Phase 2** | All work packages live | ✅ COMPLETE (28 Feb 2026) |
-| **Phase 3** | Contradiction detection, retrieval validation loop | Future |
+**Reactive watcher not triggering (Linux)?**
+- Run `systemctl --user status total-recall-watcher`
+- Check `inotify-tools` is installed: `which inotifywait`
+- View watcher logs: `journalctl --user -u total-recall-watcher -f`
 
-**Completed rollout schedule:**
+**Dream Cycle archiving too aggressively?**
+- Enable `READ_ONLY_MODE=true` and review dream logs before going live
+- Adjust `DREAM_TOKEN_TARGET` upward to archive less per run
 
-| Night/Morning | What | Status |
-|---------------|------|--------|
-| Tue 24 night (02:30) | WP0 + WP0.5 + WP1 dry run | ✅ DONE |
-| Wed 25 morning (07:01) | Approved — WP0/WP0.5/WP1 LIVE (66.1% reduction) | ✅ DONE |
-| Thu 26 night (02:30) | WP3 chunking dry run | ✅ DONE |
-| Thu 26 morning | Review — WP3 LIVE (74.9% reduction, 6 chunks from 36 obs) | ✅ DONE |
-| Fri 27 night (02:30) | WP2 importance decay dry run | ✅ DONE |
-| Fri 27 morning | Review — WP2 LIVE (25 obs decayed, 0 lost) | ✅ DONE |
-| Sat 28 night (02:30) | WP4 pattern promotion dry run | ✅ DONE |
-| Sat 28 morning | Review — WP4 LIVE, Phase 2 complete | ✅ DONE |
-
-**Phase 2 work packages:**
-- **WP0 Multi-hook** — 4-5 alternative search phrasings per archived item (30-50% recall improvement)
-- **WP0.5 Confidence** — 0.0-1.0 score + source attribution (explicit/implicit/inference/weak/uncertain)
-- **WP3 Chunking** — compress 3+ related observations into a single entry with synthesised finding
-- **WP2 Importance decay** — 7 memory types (fact, preference, goal, habit, event, rule, context) with per-type TTL and daily decay
-- **WP4 Pattern promotion** — multi-day patterns → staged proposals in `memory/dream-staging/` for human approval
-
-**Phase 3 preview:**
-- **Contradiction detection** — NLI-based, flag conflicting facts
-- **Retrieval validation** — measure retrieval quality, not just archival accuracy
-
-See `research/dream-cycle-strategy.md` and `research/dream-cycle-phase2-scope.md` for full design docs.
-
-Phase 2 is now the default behaviour. The `DREAM_PHASE` variable is retained for compatibility but no longer needs to be set explicitly.
+**Dream Cycle not archiving enough?**
+- Lower `DREAM_TOKEN_TARGET` to trigger more aggressive consolidation
 
 ---
 
