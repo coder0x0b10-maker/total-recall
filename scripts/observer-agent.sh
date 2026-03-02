@@ -207,7 +207,7 @@ TODAY=$(date '+%Y-%m-%d')
 # Feed last 30 lines of existing observations so LLM avoids repeating them
 EXISTING_TAIL=""
 if [ -f "$OBSERVATIONS_FILE" ]; then
-  EXISTING_TAIL=$(tail -80 "$OBSERVATIONS_FILE" | grep -E '^\s*-\s*[🔴🟡🟢]' | tail -40)
+  EXISTING_TAIL=$(tail -80 "$OBSERVATIONS_FILE" | grep -E '^\s*-\s*[🔴🟡🟢]' | tail -40 || true)
 fi
 
 DEDUP_CONTEXT=""
@@ -269,7 +269,7 @@ if [ -f "$OBSERVATIONS_FILE" ]; then
   # Build fingerprints: strip bullets/emoji/timestamps/markdown, take first 40 chars
   # LC_ALL=C ensures cut operates on bytes consistently across locales
   # Use first 80 chars and normalise dates/day-names for better dedup matching
-  EXISTING_FP=$(grep -E '^\s*-\s*[🔴🟡🟢]' "$OBSERVATIONS_FILE" | sed 's/^[[:space:]]*-[[:space:]]*[🔴🟡🟢][[:space:]]*[0-9:]*[[:space:]]*//' | sed 's/\*\*//g' | sed -E 's/[0-9]{4}-[0-9]{2}-[0-9]{2}//g; s/(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)//gi; s/  +/ /g' | LC_ALL=C cut -c1-80 | sort -u)
+  EXISTING_FP=$(grep -E '^\s*-\s*[🔴🟡🟢]' "$OBSERVATIONS_FILE" | sed 's/^[[:space:]]*-[[:space:]]*[🔴🟡🟢][[:space:]]*[0-9:]*[[:space:]]*//' | sed 's/\*\*//g' | sed -E 's/[0-9]{4}-[0-9]{2}-[0-9]{2}//g; s/(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)//gi; s/  +/ /g' | LC_ALL=C cut -c1-80 | sort -u || true)
 
   # Guard: if no existing fingerprints, skip dedup entirely (prevents empty grep matching everything)
   if [ -z "$EXISTING_FP" ]; then
