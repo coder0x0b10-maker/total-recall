@@ -84,7 +84,8 @@ if [ -f "$OBSERVER_LOCK" ]; then
 fi
 echo $$ > "$OBSERVER_LOCK"
 TMPMSGS=""
-trap 'rm -f "$OBSERVER_LOCK" "$TMPMSGS" 2>/dev/null' EXIT
+MSGS_TMP=""
+trap 'rm -f "$OBSERVER_LOCK" "$TMPMSGS" "$MSGS_TMP" 2>/dev/null' EXIT
 
 # --- Determine lookback window ---
 FLUSH_MODE=false
@@ -201,23 +202,26 @@ if [ -z "${LLM_API_KEY:-}" ]; then
 fi
 
 # --- Call LLM (with existing observations context for dedup) ---
-SYSTEM_PROMPT=$(cat "$OBSERVER_PROMPT")
 TODAY=$(date '+%Y-%m-%d')
 
 # Feed last 30 lines of existing observations so LLM avoids repeating them
 EXISTING_TAIL=""
 if [ -f "$OBSERVATIONS_FILE" ]; then
-  EXISTING_TAIL=$(tail -80 "$OBSERVATIONS_FILE" | grep -E '^\s*-\s*[🔴🟡🟢]' | tail -40)
+  EXISTING_TAIL=$(tail -80 "$OBSERVATIONS_FILE" | grep -E '^\s*-\s*[🔴🟡🟢]' | tail -40 || true)
 fi
 
-DEDUP_CONTEXT=""
-if [ -n "$EXISTING_TAIL" ]; then
-  DEDUP_CONTEXT="\n\n## Already Recorded (DO NOT repeat these — they are already in memory)\n$EXISTING_TAIL"
-fi
+# Write user content to temp file (avoids jq --arg issues with special chars in messages)
+MSGS_TMP=$(mktemp)
+{
+  printf 'Today is %s. Compress these recent messages into observations:\n\n%s' "$TODAY" "$RECENT_MESSAGES"
+  if [ -n "$EXISTING_TAIL" ]; then
+    printf '\n\n## Already Recorded (DO NOT repeat these — they are already in memory)\n%s' "$EXISTING_TAIL"
+  fi
+} > "$MSGS_TMP"
 
 PAYLOAD=$(jq -n \
-  --arg system "$SYSTEM_PROMPT" \
-  --arg messages "Today is $TODAY. Compress these recent messages into observations:\n\n$RECENT_MESSAGES$DEDUP_CONTEXT" \
+  --rawfile system "$OBSERVER_PROMPT" \
+  --rawfile messages "$MSGS_TMP" \
   '{
     model: "placeholder",
     messages: [
@@ -227,6 +231,7 @@ PAYLOAD=$(jq -n \
     max_tokens: 2000,
     temperature: 0.3
   }')
+rm -f "$MSGS_TMP"
 
 log "DEBUG: LLM_MODEL is $LLM_MODEL"
 log "DEBUG: OBSERVER_MODEL is $OBSERVER_MODEL"
@@ -269,7 +274,7 @@ if [ -f "$OBSERVATIONS_FILE" ]; then
   # Build fingerprints: strip bullets/emoji/timestamps/markdown, take first 40 chars
   # LC_ALL=C ensures cut operates on bytes consistently across locales
   # Use first 80 chars and normalise dates/day-names for better dedup matching
-  EXISTING_FP=$(grep -E '^\s*-\s*[🔴🟡🟢]' "$OBSERVATIONS_FILE" | sed 's/^[[:space:]]*-[[:space:]]*[🔴🟡🟢][[:space:]]*[0-9:]*[[:space:]]*//' | sed 's/\*\*//g' | sed -E 's/[0-9]{4}-[0-9]{2}-[0-9]{2}//g; s/(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)//gi; s/  +/ /g' | LC_ALL=C cut -c1-80 | sort -u)
+  EXISTING_FP=$(grep -E '^\s*-\s*[🔴🟡🟢]' "$OBSERVATIONS_FILE" | sed 's/^[[:space:]]*-[[:space:]]*[🔴🟡🟢][[:space:]]*[0-9:]*[[:space:]]*//' | sed 's/\*\*//g' | sed -E 's/[0-9]{4}-[0-9]{2}-[0-9]{2}//g; s/(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)//gi; s/  +/ /g' | LC_ALL=C cut -c1-80 | sort -u || true)
 
   # Guard: if no existing fingerprints, skip dedup entirely (prevents empty grep matching everything)
   if [ -z "$EXISTING_FP" ]; then
