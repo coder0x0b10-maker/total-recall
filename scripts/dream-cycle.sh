@@ -98,7 +98,7 @@ cmd_preflight() {
   fi
 
   require_file "$OBSERVATIONS_FILE"
-  require_file "$FAVORITES_FILE"
+  [ -f "$FAVORITES_FILE" ] || { mkdir -p "$MEMORY_DIR"; printf "# Favorites\n\n(No favorites recorded yet.)\n" > "$FAVORITES_FILE"; }
   ensure_dirs
 
   local backup_file="$BACKUP_DIR/observations.pre-dream.md"

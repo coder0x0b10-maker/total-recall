@@ -23,7 +23,7 @@ OBSERVATIONS_FILE="$MEMORY_DIR/observations.md"
 REFLECTOR_PROMPT="$SKILL_DIR/prompts/reflector-system.txt"
 REFLECTOR_LOG="$WORKSPACE/logs/reflector.log"
 BACKUP_DIR="$MEMORY_DIR/observation-backups"
-LOCK_FILE="/tmp/total-recall-reflector-$(id -u).lock"
+LOCK_FILE="$WORKSPACE/logs/reflector.lock"
 
 # Safe env loading
 if [ -f "$WORKSPACE/.env" ]; then

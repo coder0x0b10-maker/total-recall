@@ -29,7 +29,7 @@ OBSERVER_PROMPT="$SKILL_DIR/prompts/observer-system.txt"
 OBSERVER_LOG="$WORKSPACE/logs/observer.log"
 MARKER_FILE="$MEMORY_DIR/.observer-last-run"
 HASH_FILE="$MEMORY_DIR/.observer-last-hash"
-LOCK_FILE="/tmp/total-recall-reflector-$(id -u).lock"
+LOCK_FILE="$WORKSPACE/logs/reflector.lock"
 
 # Source env if available (grep-guard: only export KEY=VALUE lines)
 if [ -f "$WORKSPACE/.env" ]; then
@@ -61,7 +61,7 @@ if [ ! -f "$OBSERVER_PROMPT" ]; then
 fi
 
 # --- Lock check (prevent collision with reflector OR another observer) ---
-OBSERVER_LOCK="/tmp/total-recall-observer-$(id -u).lock"
+OBSERVER_LOCK="$WORKSPACE/logs/observer.lock"
 if [ -f "$LOCK_FILE" ]; then
   LOCK_AGE=$(( $(date +%s) - $(file_mtime "$LOCK_FILE") ))
   if [ "$LOCK_AGE" -lt 300 ]; then
