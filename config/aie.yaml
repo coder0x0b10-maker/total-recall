@@ -33,6 +33,11 @@ models:
   ambient_actions: google/gemini-2.5-flash
 
 connectors:
+  scoring:
+    model: google/gemini-3.1-flash-lite-preview
+    batch_size: 12
+    cache_threshold: 3
+    sender_cache_file: ./memory/sensor-state/sender-cache.json
   # Sender substrings that raise email importance to 0.8.
   # Add your own patterns here (employer, accountant, doctor, school, etc.)
   # Examples: "mycompany", "school", "hospital", "tax-authority", "bank"
@@ -50,13 +55,16 @@ connectors:
   ionos:
     enabled: false
     account: ionos
+    query: recent
+    max_messages: 20
     unread_limit: 10
   gmail:
     enabled: false
     provider: gog
     account: ""
-    unread_query: is:unread
-    max_messages: 10
+    query: newer_than:3h
+    unread_query: newer_than:3h
+    max_messages: 20
     keyring_password: ""
   fitbit:
     enabled: false
