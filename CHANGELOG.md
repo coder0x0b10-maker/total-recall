@@ -2,6 +2,19 @@
 
 All notable changes to Total Recall are documented here.
 
+## [2.1.0] - 2026-03-07
+
+### Changed
+- Gmail and IONOS connectors now use two-gate email scoring instead of regex-only sender matching
+- Gate 1 adds a learned sender cache that builds automatically over time with no manual setup
+- Gate 2 adds LLM content triage with configurable model and batch sizing via `config/aie.yaml`
+- Gmail default query changed from unread-only to time-window (`newer_than:3h`) to catch emails already read on other devices
+- IONOS connector now scores recent messages by default (state dedupe still prevents duplicates)
+- Connector hardening improved for macOS/Linux compatibility (timeouts, lock waits, temp cleanup, safer JSON handling)
+
+### Fixed
+- `noreply` sender patterns no longer silently suppress important operational emails (deliveries, financial notices, account/security updates)
+
 ## [2.0.1] - 2026-03-05
 
 ### Fixed

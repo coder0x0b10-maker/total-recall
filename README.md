@@ -184,14 +184,22 @@ thresholds:
 `gmail`
 
 - `account`
-- `unread_query`
+- `query` (default `newer_than:3h`)
 - `max_messages`
 - `keyring_password`
 
 `ionos`
 
 - `account`
-- `unread_limit`
+- `query` (`recent` or `unread`)
+- `max_messages`
+
+`connectors.scoring`
+
+- `model`
+- `batch_size`
+- `cache_threshold`
+- `sender_cache_file`
 
 `connectors.high_importance_senders`
 
