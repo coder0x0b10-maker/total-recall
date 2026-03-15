@@ -556,6 +556,20 @@ execute_remind() {
     return 1
   fi
   
+  # Dedup: skip if a pending reminder with similar topic already exists
+  # Uses first 30 chars to catch LLM rewording the same reminder differently
+  if [[ -f "$REMINDERS_FILE" ]]; then
+    local reminder_prefix="${reminder:0:30}"
+    local existing_match
+    existing_match=$(jq -r --arg prefix "$reminder_prefix" \
+      'select(.status == "pending") | select(.reminder[0:30] | startswith($prefix[0:20])) | .reminder' \
+      "$REMINDERS_FILE" 2>/dev/null | head -1)
+    if [[ -n "$existing_match" ]]; then
+      log "Reminder dedup: similar pending reminder already exists, skipping: ${reminder:0:50}..."
+      return 0
+    fi
+  fi
+  
   if [[ "$MODE" == "dry_run_actions" ]]; then
     log "[DRY RUN] Would remind at $trigger_at: ${reminder:0:80}..."
     ((REMIND_COUNT++))
