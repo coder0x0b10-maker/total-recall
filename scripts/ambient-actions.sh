@@ -472,8 +472,8 @@ execute_draft() {
   draft_content=$(cat <<EOF
 # Draft: $description
 
-_Created: $NOW_
-_Importance: $importance_
+_Created: ${NOW}_
+_Importance: ${importance}_
 
 ---
 

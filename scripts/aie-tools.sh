@@ -271,7 +271,8 @@ run_tool() {
       ;;
     ionos_search)
       effective_timeout=$(cap_timeout 15 "$remaining_budget")
-      run_timed_capture "$effective_timeout" 2000 himalaya envelope list --account "$IONOS_ACCOUNT" -q "$query" -s date -p 1 -w 5
+      # himalaya writes errors to stdout with exit 0; pipe through sed to strip ANSI codes
+      run_timed_capture "$effective_timeout" 2000 bash -c 'himalaya envelope list --account "$1" -q "$2" -s date -p 1 -w 5 2>&1 | sed "s/\x1b\[[0-9;]*m//g"' _ "$IONOS_ACCOUNT" "$query"
       ;;
     todoist_query)
       effective_timeout=$(cap_timeout 10 "$remaining_budget")
