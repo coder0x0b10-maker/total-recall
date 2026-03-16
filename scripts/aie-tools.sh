@@ -271,8 +271,15 @@ run_tool() {
       ;;
     ionos_search)
       effective_timeout=$(cap_timeout 15 "$remaining_budget")
-      # himalaya writes errors to stdout with exit 0; pipe through sed to strip ANSI codes
-      run_timed_capture "$effective_timeout" 2000 bash -c 'himalaya envelope list --account "$1" -q "$2" -s date -p 1 -w 5 2>&1 | sed "s/\x1b\[[0-9;]*m//g"' _ "$IONOS_ACCOUNT" "$query"
+      # himalaya v1.x uses positional IMAP-style query, not -q flag
+      # Convert free-text query into "subject X or body X" format for himalaya
+      local _ionos_q
+      _ionos_q=$(echo "$query" | sed 's/ OR / or /g; s/ AND / and /g')
+      # If query doesn't contain himalaya keywords (subject/body/from/to/date/before/after), wrap it
+      if ! echo "$_ionos_q" | grep -qiE '\b(subject|body|from|to|date|before|after|flag)\b'; then
+        _ionos_q="subject $_ionos_q or body $_ionos_q"
+      fi
+      run_timed_capture "$effective_timeout" 2000 bash -c 'himalaya envelope list --account "$1" --page-size 5 -- $2 order by date desc 2>&1 | sed "s/\x1b\[[0-9;]*m//g"' _ "$IONOS_ACCOUNT" "$_ionos_q"
       ;;
     todoist_query)
       effective_timeout=$(cap_timeout 10 "$remaining_budget")
