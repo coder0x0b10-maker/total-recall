@@ -115,21 +115,12 @@ for ATTEMPT in 1 2; do
   MODEL="${MODELS[$((ATTEMPT-1))]}"
   
   # Update payload with current model
-  PAYLOAD=$(jq -n --arg model "$MODEL" --arg prompt "$PROMPT" '{
-    model: $model,
-    messages: [
-      {
-        role: "system",
-        content: $prompt
-      }
-    ],
-    temperature: 0.2
-  }')
+  ATTEMPT_PAYLOAD=$(echo "$PAYLOAD" | jq --arg m "$MODEL" '.model = $m')
 
   RESPONSE=$(curl -s --max-time 120 "$LLM_BASE_URL/chat/completions" \
     -H "Authorization: Bearer $LLM_API_KEY" \
     -H "Content-Type: application/json" \
-    -d "$PAYLOAD" 2>/dev/null)
+    -d "$ATTEMPT_PAYLOAD" 2>/dev/null)
 
   CONTENT=$(echo "$RESPONSE" | jq -r '.choices[0].message.content // empty' 2>/dev/null)
   REASONING=$(echo "$RESPONSE" | jq -r '.choices[0].message.reasoning // empty' 2>/dev/null)

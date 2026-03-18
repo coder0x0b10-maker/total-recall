@@ -35,7 +35,7 @@ LOCK_FILE="$WORKSPACE/logs/reflector.lock"
 if [ -f "$WORKSPACE/.env" ]; then
   set -a
   # Load provider config + backward compatible OPENROUTER key
-  eval "$(grep -E '^(LLM_BASE_URL|LLM_API_KEY|LLM_MODEL|OPENROUTER_API_KEY|OBSERVER_MODEL)=' "$WORKSPACE/.env" 2>/dev/null)" || true
+  eval "$(grep -E '^(LLM_BASE_URL|LLM_API_KEY|LLM_MODEL|OPENROUTER_API_KEY|OBSERVER_MODEL|OBSERVER_FALLBACK_MODEL)=' "$WORKSPACE/.env" 2>/dev/null)" || true
   set +a
 fi
 
