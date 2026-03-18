@@ -114,7 +114,18 @@ for ATTEMPT in 1 2; do
     -H "Content-Type: application/json" \
     -d "$PAYLOAD" 2>/dev/null)
 
-  REFLECTED=$(echo "$RESPONSE" | jq -r '.choices[0].message.content // .choices[0].message.reasoning // empty' 2>/dev/null)
+  CONTENT=$(echo "$RESPONSE" | jq -r '.choices[0].message.content // empty' 2>/dev/null)
+  REASONING=$(echo "$RESPONSE" | jq -r '.choices[0].message.reasoning // empty' 2>/dev/null)
+  
+  # Use content if not empty, otherwise fall back to reasoning
+  if [ -n "$CONTENT" ] && [ "$CONTENT" != "null" ] && [ "$CONTENT" != "" ]; then
+    REFLECTED="$CONTENT"
+  elif [ -n "$REASONING" ] && [ "$REASONING" != "null" ] && [ "$REASONING" != "" ]; then
+    REFLECTED="$REASONING"
+  else
+    REFLECTED=""
+  fi
+  
   [ -n "$REFLECTED" ] && break
 
   ERROR=$(echo "$RESPONSE" | jq -r '.error.message // empty' 2>/dev/null)
