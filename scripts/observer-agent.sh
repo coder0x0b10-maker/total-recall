@@ -254,10 +254,10 @@ for ATTEMPT in 1 2; do
   CONTENT=$(echo "$RESPONSE" | jq -r '.choices[0].message.content // empty' 2>/dev/null)
   REASONING=$(echo "$RESPONSE" | jq -r '.choices[0].message.reasoning // empty' 2>/dev/null)
   
-  # Use content if not empty, otherwise fall back to reasoning
-  if [ -n "$CONTENT" ] && [ "$CONTENT" != "null" ] && [ "$CONTENT" != "" ]; then
+  # Use content if not empty and not just whitespace, otherwise fall back to reasoning
+  if [ -n "$CONTENT" ] && [ "$CONTENT" != "null" ] && [ "$CONTENT" != "" ] && [[ "$CONTENT" =~ [^[:space:]] ]]; then
     OBSERVATION="$CONTENT"
-  elif [ -n "$REASONING" ] && [ "$REASONING" != "null" ] && [ "$REASONING" != "" ]; then
+  elif [ -n "$REASONING" ] && [ "$REASONING" != "null" ] && [ "$REASONING" != "" ] && [[ "$REASONING" =~ [^[:space:]] ]]; then
     OBSERVATION="$REASONING"
   else
     OBSERVATION=""
