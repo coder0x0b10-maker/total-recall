@@ -38,7 +38,10 @@ fi
 LLM_BASE_URL="${LLM_BASE_URL:-https://openrouter.ai/api/v1}"
 LLM_API_KEY="${LLM_API_KEY:-${OPENROUTER_API_KEY:-}}"
 LLM_MODEL="${LLM_MODEL:-google/gemini-2.5-flash}"
-REFLECTOR_MODEL="${REFLECTOR_MODEL:-${OBSERVER_MODEL:-nvidia/nemotron-3-super-120b-a12b:free}}"
+# Only set REFLECTOR_MODEL if not already set in .env, fallback to OBSERVER_MODEL (from .env or default), then to default model
+if [ -z "${REFLECTOR_MODEL:-}" ]; then
+  REFLECTOR_MODEL="${OBSERVER_MODEL:-nvidia/nemotron-3-super-120b-a12b:free}"
+fi
 REFLECTOR_FALLBACK_MODEL="${REFLECTOR_FALLBACK_MODEL:-openrouter/hunter-alpha}"
 
 mkdir -p "$WORKSPACE/logs" "$BACKUP_DIR"

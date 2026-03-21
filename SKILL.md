@@ -1,6 +1,6 @@
 ---
 name: total-recall
-description: "The only memory skill that watches on its own. No database. No vectors. No manual saves. Just an LLM observer that compresses your conversations into prioritised notes, consolidates when they grow, and recovers anything missed. Five layers of redundancy, zero maintenance. ~$0.00/month. While other memory skills ask you to remember to remember, this one just pays attention."
+description: "The only memory skill that watches on its own. No database. No vectors. No manual saves. Just an LLM observer that compresses your conversations into prioritised notes, consolidates when they grow, and recovers anything missed. Five layers of redundancy, zero maintenance. ~$0.00/month (using free-tier models). While other memory skills ask you to remember to remember, this one just pays attention."
 metadata:
   openclaw:
     emoji: "🧠"
@@ -19,7 +19,7 @@ metadata:
 
 **The only memory skill that watches on its own.**
 
-No database. No vectors. No manual saves. Just an LLM observer that compresses your conversations into prioritised notes, consolidates when they grow, and recovers anything missed. Five layers of redundancy, zero maintenance. ~$0.00/month.
+No database. No vectors. No manual saves. Just an LLM observer that compresses your conversations into prioritised notes, consolidates when they grow, and recovers anything missed. Five layers of redundancy, zero maintenance. ~$0.00/month (using free-tier models).
 
 While other memory skills ask you to remember to remember, this one just pays attention.
 
@@ -176,7 +176,7 @@ journalctl --user -u total-recall-watcher -f
 ## Cost
 
 Using the default free models via OpenRouter:
-- ~$0.00/month for typical usage (observer + reflector)
+- ~$0.00/month (using free-tier models) for typical usage (observer + reflector)
 - ~15-30 cron runs/day, each processing a few hundred tokens
 - All default models are free tier models
 
