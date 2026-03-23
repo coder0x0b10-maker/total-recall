@@ -12,7 +12,17 @@ Total Recall v2.0 keeps the existing v1.x stack intact:
 
 It also adds the Ambient Intelligence Engine (AIE): a configurable sensor and rumination pipeline that can watch external systems, think about what changed, maintain a preconscious buffer, and surface urgent items.
 
-Prerequisites: `python3`, `jq`, `curl`, and `pip install pyyaml`.
+Prerequisites: `python3`, `jq`, `curl`, and `PyYAML`.
+
+Install PyYAML with:
+
+```bash
+python3 -m pip install PyYAML
+# or on Debian/Ubuntu:
+sudo apt install python3-yaml
+```
+
+`setup.sh` will verify all dependencies are present before continuing.
 
 ## Architecture
 
@@ -248,6 +258,31 @@ thresholds:
 - `web_search.enabled`
 - `web_search.script`
 - `places_lookup.enabled`
+
+### Action resolution system
+
+`ambient-actions.sh` reads enriched rumination insights and decides what to do with them. Five action types are supported, each with guardrails to prevent runaway behaviour:
+
+| Action | Description | Guardrails |
+|--------|-------------|------------|
+| `ask` | Surfaces a question to the user via preconscious buffer | Max 3/run |
+| `learn` | Stores a confirmed fact to `learned-facts.json` | Importance >= 0.7, dedup, max 5/run |
+| `draft` | Prepares content for user review in `drafts/` | Importance >= 0.75, max 2/run |
+| `notify` | Sends an urgent alert via emergency-surface | Importance >= 0.85, max 2/day, quiet hours respected |
+| `remind` | Creates a time-based nudge in `reminders.jsonl` | Auto-surfaces when due, max 3/run |
+
+#### Runtime files
+
+The AIE creates several files in `memory/rumination/` during operation:
+
+- `learned-facts.json` — facts the engine has confirmed and stored autonomously
+- `reminders.jsonl` — pending time-based nudges
+- `drafts/` — content prepared for user review (one `.md` file per draft)
+- `cycle-state.json` — working memory: tracks lookups between cycles with TTL-based dedup (4hr window)
+
+#### Agent startup
+
+For best results, have your agent read `memory/rumination/learned-facts.json` and check `memory/rumination/drafts/` at session start. This surfaces what the AIE has learned and prepared between sessions.
 
 ## Existing v1.x Notes
 
