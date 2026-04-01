@@ -11,11 +11,13 @@ MEMORY_DIR="${WORKSPACE}/memory"
 OBSERVATIONS_FILE="${MEMORY_DIR}/observations.md"
 BACKUP_FILE="${OBSERVATIONS_FILE}.pre-backfill.bak"
 
-# Source env
+# Source env (secure loading without eval)
 if [ -f "$WORKSPACE/.env" ]; then
-  set -a
-  eval "$(grep -E '^(ANTHROPIC_API_KEY)=' "$WORKSPACE/.env" 2>/dev/null)" || true
-  set +a
+  while IFS='=' read -r key value; do
+    if [[ "$key" = "ANTHROPIC_API_KEY" ]]; then
+      export "$key"="$value"
+    fi
+  done < "$WORKSPACE/.env"
 fi
 
 MODEL="${BACKFILL_MODEL:-claude-opus-4-20250918}"

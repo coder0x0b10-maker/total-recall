@@ -27,10 +27,12 @@ ACCUMULATED_LINES=0
 
 # Safe env loading
 if [ -f "$WORKSPACE/.env" ]; then
-  set -a
-  # Only load OPENROUTER_API_KEY (minimal credential exposure)
-  eval "$(grep -E '^OPENROUTER_API_KEY=' "$WORKSPACE/.env" 2>/dev/null)" || true
-  set +a
+  # Securely load OPENROUTER_API_KEY without eval/code execution risk
+  while IFS='=' read -r key value; do
+    if [[ "$key" = "OPENROUTER_API_KEY" ]]; then
+      export "$key"="$value"
+    fi
+  done < "$WORKSPACE/.env"
 fi
 
 mkdir -p "$WORKSPACE/logs"

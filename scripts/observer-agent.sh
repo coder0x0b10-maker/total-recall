@@ -31,11 +31,15 @@ MARKER_FILE="$MEMORY_DIR/.observer-last-run"
 HASH_FILE="$MEMORY_DIR/.observer-last-hash"
 LOCK_FILE="$WORKSPACE/logs/reflector.lock"
 
-# Source env if available (grep-guard: only export KEY=VALUE lines)
+# Source env if available (secure loading without eval)
 if [ -f "$WORKSPACE/.env" ]; then
   set -a
-  # Load provider config + backward compatible OPENROUTER key
-  eval "$(grep -E '^(LLM_BASE_URL|LLM_API_KEY|LLM_MODEL|OPENROUTER_API_KEY|OBSERVER_MODEL|OBSERVER_FALLBACK_MODEL)=' "$WORKSPACE/.env" 2>/dev/null)" || true
+  # Securely load variables without code execution risk
+  while IFS='=' read -r key value; do
+    if [[ "$key" =~ ^(LLM_BASE_URL|LLM_API_KEY|LLM_MODEL|OPENROUTER_API_KEY|OBSERVER_MODEL|OBSERVER_FALLBACK_MODEL)$ ]]; then
+      export "$key"="$value"
+    fi
+  done < "$WORKSPACE/.env"
   set +a
 fi
 

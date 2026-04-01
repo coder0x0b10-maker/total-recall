@@ -16,8 +16,8 @@ LLM_BASE_URL="${LLM_BASE_URL:-https://openrouter.ai/api/v1}"
 LLM_API_KEY="${LLM_API_KEY:-${OPENROUTER_API_KEY:-}}"
 LLM_MODEL="${LLM_MODEL:-google/gemini-2.5-flash}"
 
-REFLECTOR_MODEL="${REFLECTOR_MODEL:-${OBSERVER_MODEL:-nvidia/nemotron-3-super-120b-a12b:free}}"
-REFLECTOR_FALLBACK_MODEL="${REFLECTOR_FALLBACK_MODEL:-openrouter/hunter-alpha}"
+REFLECTOR_MODEL="${REFLECTOR_MODEL:-${OBSERVER_MODEL:-google/gemini-2.5-flash}}"
+REFLECTOR_FALLBACK_MODEL="${REFLECTOR_FALLBACK_MODEL:-openrouter/claude-sonnet-4-5-20250514}"
 REFLECTOR_WORD_THRESHOLD="${REFLECTOR_WORD_THRESHOLD:-8000}"
 
 OBSERVATIONS_FILE="$MEMORY_DIR/observations.md"
@@ -26,11 +26,15 @@ REFLECTOR_LOG="$WORKSPACE/logs/reflector.log"
 BACKUP_DIR="$MEMORY_DIR/observation-backups"
 LOCK_FILE="$WORKSPACE/logs/reflector.lock"
 
-# Safe env loading
+# Env variables loaded below
 if [ -f "$WORKSPACE/.env" ]; then
   set -a
-  # Load provider config + backward compatible OPENROUTER key
-  eval "$(grep -E '^(LLM_BASE_URL|LLM_API_KEY|LLM_MODEL|OPENROUTER_API_KEY|OBSERVER_MODEL|REFLECTOR_MODEL|REFLECTOR_FALLBACK_MODEL)=' "$WORKSPACE/.env" 2>/dev/null)" || true
+  # Securely load variables without code execution risk (no eval)
+  while IFS='=' read -r key value; do
+    if [[ "$key" =~ ^(LLM_BASE_URL|LLM_API_KEY|LLM_MODEL|OPENROUTER_API_KEY|OBSERVER_MODEL|REFLECTOR_MODEL|REFLECTOR_FALLBACK_MODEL)$ ]]; then
+      export "$key"="$value"
+    fi
+  done < "$WORKSPACE/.env"
   set +a
 fi
 
@@ -40,7 +44,7 @@ LLM_API_KEY="${LLM_API_KEY:-${OPENROUTER_API_KEY:-}}"
 LLM_MODEL="${LLM_MODEL:-google/gemini-2.5-flash}"
 # Only set REFLECTOR_MODEL if not already set in .env, fallback to OBSERVER_MODEL (from .env or default), then to default model
 if [ -z "${REFLECTOR_MODEL:-}" ]; then
-  REFLECTOR_MODEL="${OBSERVER_MODEL:-nvidia/nemotron-3-super-120b-a12b:free}"
+  REFLECTOR_MODEL="${OBSERVER_MODEL:-google/gemini-2.5-flash}"
 fi
 REFLECTOR_FALLBACK_MODEL="${REFLECTOR_FALLBACK_MODEL:-openrouter/hunter-alpha}"
 
