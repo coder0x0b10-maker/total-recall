@@ -60,6 +60,16 @@ fi
 
 # --- Load .env and check API key ---
 if [ -f "$WORKSPACE/.env" ]; then
+  # Security check: .env file should have restrictive permissions (600)
+  ENV_PERMS=$(stat -c '%a' "$WORKSPACE/.env" 2>/dev/null || stat -f '%A' "$WORKSPACE/.env" 2>/dev/null || echo "unknown")
+  if [ "$ENV_PERMS" != "600" ]; then
+    echo "⚠️  .env file permissions are $ENV_PERMS, should be 600 (owner read/write only)"
+    echo "   Run: chmod 600 $WORKSPACE/.env"
+    echo "   This is a security risk — API keys could be readable by other users!"
+  else
+    echo "✅ .env file has secure permissions (600)"
+  fi
+
   set -a
   if ! source "$WORKSPACE/.env" 2>/dev/null; then
     echo "⚠️  Failed to source $WORKSPACE/.env — check for shell syntax errors"
@@ -98,7 +108,10 @@ mkdir -p "$MEMORY_DIR/.dream-backups"
 mkdir -p "$MEMORY_DIR/sensor-state"
 mkdir -p "$WORKSPACE/logs"
 mkdir -p "$WORKSPACE/research/dream-cycle-metrics/daily"
-echo "✅ Directories created"
+
+# Set secure permissions on memory directory (owner read/write/execute only)
+chmod 700 "$MEMORY_DIR"
+echo "✅ Directories created with secure permissions"
 
 # --- Create initial observations file ---
 if [ ! -f "$MEMORY_DIR/observations.md" ]; then
