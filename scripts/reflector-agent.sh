@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
 # Reflector Agent — consolidates observations.md when it gets too large
 # Part of Total Recall skill
+# Uses centralized model selection with fallback support
 
 set -euo pipefail
 
 # --- Configuration ---
 SKILL_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 source "$SKILL_DIR/scripts/_compat.sh"
+source "$SKILL_DIR/scripts/aie-config.sh"
+aie_init
 
 WORKSPACE="${OPENCLAW_WORKSPACE:-$(cd "$SKILL_DIR/../.." && pwd)}"
 MEMORY_DIR="${MEMORY_DIR:-$WORKSPACE/memory}"
@@ -14,9 +17,13 @@ MEMORY_DIR="${MEMORY_DIR:-$WORKSPACE/memory}"
 # LLM provider configuration (OpenAI-compatible APIs)
 LLM_BASE_URL="${LLM_BASE_URL:-https://openrouter.ai/api/v1}"
 LLM_API_KEY="${LLM_API_KEY:-${OPENROUTER_API_KEY:-}}"
-LLM_MODEL="${LLM_MODEL:-google/gemini-2.5-flash}"
+LLM_MODEL="${LLM_MODEL:-$(aie_get_reflector_model)}"
 
-REFLECTOR_MODEL="${REFLECTOR_MODEL:-${OBSERVER_MODEL:-google/gemini-2.5-flash}}"
+# Backward-compatible: env var overrides centralized config
+if [ -n "${REFLECTOR_MODEL:-}" ]; then
+  LLM_MODEL="$REFLECTOR_MODEL"
+fi
+
 REFLECTOR_FALLBACK_MODEL="${REFLECTOR_FALLBACK_MODEL:-openrouter/claude-sonnet-4-5-20250514}"
 REFLECTOR_WORD_THRESHOLD="${REFLECTOR_WORD_THRESHOLD:-8000}"
 

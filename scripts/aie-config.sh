@@ -384,12 +384,22 @@ aie_is_quiet_hours() {
 # Logs retry attempts if LOG_RETRIES is set to "true" (default from config)
 aie_retry_call() {
     local max_attempts base_delay max_delay jitter enable_retry_log label attempt delay exit_code output
-    max_attempts="$(aie_get "connectors.retry.max_attempts" "3")"
-    base_delay="$(aie_get "connectors.retry.base_delay" "1.0")"
-    max_delay="$(aie_get "connectors.retry.max_delay" "10.0")"
-    jitter="$(aie_get "connectors.retry.jitter" "true")"
-    enable_retry_log="$(aie_get "connectors.retry.log_retries" "true")"
-    label="$(aie_get "connectors.retry.label" "total-recall")"
+
+    # Try to get config values, fallback to defaults if config system unavailable
+    local max_cfg base_cfg maxd_cfg jitter_cfg log_cfg label_cfg
+    max_cfg="$(aie_get "connectors.retry.max_attempts" "" 2>/dev/null || echo "")"
+    base_cfg="$(aie_get "connectors.retry.base_delay" "" 2>/dev/null || echo "")"
+    maxd_cfg="$(aie_get "connectors.retry.max_delay" "" 2>/dev/null || echo "")"
+    jitter_cfg="$(aie_get "connectors.retry.jitter" "" 2>/dev/null || echo "")"
+    log_cfg="$(aie_get "connectors.retry.log_retries" "" 2>/dev/null || echo "")"
+    label_cfg="$(aie_get "connectors.retry.label" "" 2>/dev/null || echo "")"
+
+    max_attempts="${max_cfg:-3}"
+    base_delay="${base_cfg:-1.0}"
+    max_delay="${maxd_cfg:-10.0}"
+    jitter="${jitter_cfg:-true}"
+    enable_retry_log="${log_cfg:-true}"
+    label="${label_cfg:-total-recall}"
 
     [[ $# -eq 0 ]] && return 1
 
@@ -440,7 +450,7 @@ aie_retry_call() {
 # Model fallback system for agent roles
 # Priority: user-specified model -> fallback chain -> original default
 RUMINATION_MODEL_DEFAULT="google/gemini-2.5-flash"
-RUMINATION_MODEL_FALLBACK_1="qwen/qwen3.6-plus-preview:free"
+RUMINATION_MODEL_FALLBACK_1="qwen/qwen3.6-plus:free"
 RUMINATION_MODEL_FALLBACK_2="nvidia/nemotron-3-nano-30b:free"
 RUMINATION_MODEL_FALLBACK_3="stepfun/step-3.5-flash:free"
 
@@ -500,7 +510,7 @@ aie_get_rumination_model() {
 
 # Observer observer model
 # Models optimized for fast, lightweight session summarization
-OBSERVER_MODEL_DEFAULT="qwen/qwen3.6-plus-preview:free"
+OBSERVER_MODEL_DEFAULT="qwen/qwen3.6-plus:free"
 OBSERVER_MODEL_FALLBACK_1="qwen/qwen3-coder:free"
 OBSERVER_MODEL_FALLBACK_2="$RUMINATION_MODEL_FALLBACK_1"
 OBSERVER_MODEL_FALLBACK_3="$RUMINATION_MODEL_FALLBACK_3"
@@ -565,7 +575,7 @@ aie_get_reflector_model() {
 # Enrichment enrichment model
 # Models optimized for structured data processing
 ENRICHMENT_MODEL_DEFAULT="qwen/qwen3-coder:free"
-ENRICHMENT_MODEL_FALLBACK_1="qwen/qwen3.6-plus-preview:free"
+ENRICHMENT_MODEL_FALLBACK_1="qwen/qwen3.6-plus:free"
 ENRICHMENT_MODEL_FALLBACK_2="$RUMINATION_MODEL_FALLBACK_3"
 
 # Get the best available model for enrichment
@@ -628,7 +638,7 @@ aie_get_ambient_actions_model() {
 DREAM_CYCLE_MODEL_DEFAULT="nousresearch/hermes-3-llama-3.1-405b:free"
 DREAM_CYCLE_MODEL_FALLBACK_1="qwen/qwen3-next-80b-a3b-instruct:free"
 DREAM_CYCLE_MODEL_FALLBACK_2="nvidia/nemotron-3-super-120b-a12b:free"
-DREAM_CYCLE_MODEL_FALLBACK_3="qwen/qwen3.6-plus-preview:free"
+DREAM_CYCLE_MODEL_FALLBACK_3="qwen/qwen3.6-plus:free"
 
 aie_get_dream_cycle_model() {
     local config_model

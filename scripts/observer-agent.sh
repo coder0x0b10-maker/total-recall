@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
 # Observer Agent — compresses recent session messages into observations
 # Part of Total Recall skill
-# Uses Gemini Flash via OpenRouter for cheap, fast compression
+# Uses centralized model selection with fallback support
 
 set -euo pipefail
 
 # --- Configuration (all overridable via env) ---
 SKILL_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 source "$SKILL_DIR/scripts/_compat.sh"
+source "$SKILL_DIR/scripts/aie-config.sh"
+aie_init
 
 WORKSPACE="${OPENCLAW_WORKSPACE:-$(cd "$SKILL_DIR/../.." && pwd)}"
 MEMORY_DIR="${MEMORY_DIR:-$WORKSPACE/memory}"
@@ -16,9 +18,13 @@ SESSIONS_DIR="${SESSIONS_DIR:-$HOME/.openclaw/agents/main/sessions}"
 # LLM provider configuration (OpenAI-compatible APIs)
 LLM_BASE_URL="${LLM_BASE_URL:-https://openrouter.ai/api/v1}"
 LLM_API_KEY="${LLM_API_KEY:-${OPENROUTER_API_KEY:-}}"
-LLM_MODEL="${LLM_MODEL:-deepseek/deepseek-v3.2}"
+LLM_MODEL="${LLM_MODEL:-$(aie_get_observer_model)}"
 
-OBSERVER_MODEL="${OBSERVER_MODEL:-stepfun/step-3.5-flash:free}"
+# Backward-compatible: env var overrides centralized config
+if [ -n "${OBSERVER_MODEL:-}" ]; then
+  LLM_MODEL="$OBSERVER_MODEL"
+fi
+
 OBSERVER_FALLBACK_MODEL="${OBSERVER_FALLBACK_MODEL:-nvidia/nemotron-3-nano-30b-a3b:free}"
 OBSERVER_LOOKBACK_MIN="${OBSERVER_LOOKBACK_MIN:-15}"
 OBSERVER_MORNING_LOOKBACK_MIN="${OBSERVER_MORNING_LOOKBACK_MIN:-480}"
