@@ -148,11 +148,13 @@ if ! [[ "$GMAIL_MAX_MESSAGES" =~ ^[0-9]+$ ]] || ((GMAIL_MAX_MESSAGES < 1)); then
 fi
 
 health_check() {
-  if ! run_timeout "$GOG_TIMEOUT_SEC" env GOG_KEYRING_PASSWORD="$GMAIL_KEYRING_PASSWORD" GOG_ACCOUNT="$GMAIL_ACCOUNT" \
-    gog gmail messages search "$GMAIL_QUERY" --max 1 --json >/dev/null 2>&1; then
-    log "ERROR: health_check failed — gog gmail unreachable"
+  # Use retry for health check to handle transient failures
+  local health_output
+  health_output=$(aie_retry_call run_timeout "$GOG_TIMEOUT_SEC" env GOG_KEYRING_PASSWORD="$GMAIL_KEYRING_PASSWORD" GOG_ACCOUNT="$GMAIL_ACCOUNT" \
+    gog gmail messages search "$GMAIL_QUERY" --max 1 --json) || {
+    log "ERROR: health_check failed — gog gmail unreachable after retries"
     return 1
-  fi
+  }
   log "health_check OK"
 }
 
@@ -218,8 +220,8 @@ gmail_fetch_body_excerpt() {
   local raw=""
   local body_candidate=""
 
-  raw=$(run_timeout "$GOG_TIMEOUT_SEC" env GOG_KEYRING_PASSWORD="$GMAIL_KEYRING_PASSWORD" GOG_ACCOUNT="$GMAIL_ACCOUNT" \
-    gog gmail get "$msg_id" 2>/dev/null || true)
+  raw=$(aie_retry_call run_timeout "$GOG_TIMEOUT_SEC" env GOG_KEYRING_PASSWORD="$GMAIL_KEYRING_PASSWORD" GOG_ACCOUNT="$GMAIL_ACCOUNT" \
+    gog gmail get "$msg_id") || true
   raw=$(printf '%s' "$raw" | head -c 200000)
 
   if [[ -n "$raw" ]] && printf '%s' "$raw" | jq -e . >/dev/null 2>&1; then
@@ -393,9 +395,9 @@ call_openrouter_batch() {
     curl_headers+=(-H "HTTP-Referer: ${HTTP_REFERER}" -H "X-Title: Total Recall")
   fi
 
-  response=$(run_timeout "$CURL_TIMEOUT_SEC" curl -sS --max-time "$CURL_TIMEOUT_SEC" https://openrouter.ai/api/v1/chat/completions \
+  response=$(aie_retry_call curl -sS --max-time "$CURL_TIMEOUT_SEC" "https://openrouter.ai/api/v1/chat/completions" \
     "${curl_headers[@]}" \
-    -d "$request" 2>/dev/null || true)
+    -d "$request") || response=""
 
   [[ -z "$response" ]] && return 1
 
@@ -431,8 +433,8 @@ COUNT=0
 SENDER_CACHE=$(sanitize_sender_cache "$(load_json_object_file "$SENDER_CACHE_FILE")" "$SCORING_CACHE_THRESHOLD")
 CACHE_UPDATES='{}'
 
-EMAILS_RAW=$(run_timeout "$GOG_TIMEOUT_SEC" env GOG_KEYRING_PASSWORD="$GMAIL_KEYRING_PASSWORD" GOG_ACCOUNT="$GMAIL_ACCOUNT" \
-  gog gmail messages search "$GMAIL_QUERY" --max "$GMAIL_MAX_MESSAGES" --json 2>/dev/null || echo '{"messages":[]}')
+EMAILS_RAW=$(aie_retry_call run_timeout "$GOG_TIMEOUT_SEC" env GOG_KEYRING_PASSWORD="$GMAIL_KEYRING_PASSWORD" GOG_ACCOUNT="$GMAIL_ACCOUNT" \
+  gog gmail messages search "$GMAIL_QUERY" --max "$GMAIL_MAX_MESSAGES" --json) || EMAILS_RAW='{"messages":[]}'
 EMAILS=$(printf '%s' "$EMAILS_RAW" | jq -c '
   if type == "array" then
     .

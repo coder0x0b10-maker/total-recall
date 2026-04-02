@@ -43,9 +43,10 @@ log() {
 }
 
 health_check() {
-  if ! GOG_KEYRING_PASSWORD="$KEYRING_PASSWORD" GOG_ACCOUNT="$CALENDAR_ACCOUNT" \
+  # Use retry for health check to handle transient failures
+  if ! aie_retry_call env GOG_KEYRING_PASSWORD="$KEYRING_PASSWORD" GOG_ACCOUNT="$CALENDAR_ACCOUNT" \
       gog calendar events "$CALENDAR_ID" --days 1 --max 1 --json >/dev/null 2>&1; then
-    log "ERROR: health_check failed — gog calendar not reachable (auth expiry?)"
+    log "ERROR: health_check failed — gog calendar not reachable after retries (auth expiry?)"
     exit 1
   fi
   log "health_check OK"
@@ -84,9 +85,9 @@ health_check
 PREV_STATE="{}"
 [[ -f "$STATE_FILE" ]] && PREV_STATE=$(cat "$STATE_FILE")
 
-# Fetch events for next 48 hours (--days 2)
-RAW=$(GOG_KEYRING_PASSWORD="$KEYRING_PASSWORD" GOG_ACCOUNT="$CALENDAR_ACCOUNT" \
-      gog calendar events "$CALENDAR_ID" --days "$LOOKAHEAD_DAYS" --max "$MAX_EVENTS" --json 2>/dev/null || echo '{"events":[]}')
+# Fetch events for next 48 hours (--days 2) with retry
+RAW=$(aie_retry_call env GOG_KEYRING_PASSWORD="$KEYRING_PASSWORD" GOG_ACCOUNT="$CALENDAR_ACCOUNT" \
+      gog calendar events "$CALENDAR_ID" --days "$LOOKAHEAD_DAYS" --max "$MAX_EVENTS" --json) || RAW='{"events":[]}'
 
 # Handle both array and object wrapper formats
 EVENTS=$(echo "$RAW" | jq -c 'if type == "array" then .[] else .events[]? end' 2>/dev/null || echo "")

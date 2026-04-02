@@ -66,9 +66,20 @@ defaults = {
         "classification": "google/gemini-2.5-flash",
         "enrichment": "google/gemini-2.5-flash",
         "ambient_actions": "google/gemini-2.5-flash",
+        "observer": "google/gemini-2.5-flash",
+        "reflector": "google/gemini-2.5-flash",
+        "dream": "google/gemini-2.5-flash",
     },
     "connectors": {
         "high_importance_senders": [],  # empty by default; users add their own
+        "retry": {
+            "max_attempts": 3,
+            "base_delay": 1.0,
+            "max_delay": 10.0,
+            "jitter": true,
+            "log_retries": true,
+            "label": "total-recall",
+        },
         "calendar": {
             "enabled": False,
             "provider": "gog",
@@ -365,4 +376,300 @@ aie_is_quiet_hours() {
   else
     ((10#$hour >= 10#$start_hour && 10#$hour < 10#$end_hour))
   fi
+}
+
+# Retry wrapper for external API calls with exponential backoff
+# Usage: output=$(aie_retry_call command arg1 arg2...) or ! aie_retry_call ...
+# Returns command stdout on success, empty on failure after all retries
+# Logs retry attempts if LOG_RETRIES is set to "true" (default from config)
+aie_retry_call() {
+    local max_attempts base_delay max_delay jitter enable_retry_log label attempt delay exit_code output
+    max_attempts="$(aie_get "connectors.retry.max_attempts" "3")"
+    base_delay="$(aie_get "connectors.retry.base_delay" "1.0")"
+    max_delay="$(aie_get "connectors.retry.max_delay" "10.0")"
+    jitter="$(aie_get "connectors.retry.jitter" "true")"
+    enable_retry_log="$(aie_get "connectors.retry.log_retries" "true")"
+    label="$(aie_get "connectors.retry.label" "total-recall")"
+
+    [[ $# -eq 0 ]] && return 1
+
+    attempt=1
+
+    while true; do
+        if [[ $attempt -gt $max_attempts ]]; then
+            [[ "$enable_retry_log" == "true" ]] && echo "WARN: $1 failed after $max_attempts attempts" >&2
+            return 1
+        fi
+
+        # Execute command with current args, capture stdout; stderr will be captured but we also want to show on failure
+        # Execute command, capturing only stdout; stderr flows to stderr of script
+        output=$("$@")
+        exit_code=$?
+
+        if [[ $exit_code -eq 0 ]]; then
+            printf '%s\n' "$output"
+            return 0
+        fi
+
+        if [[ $attempt -eq $max_attempts ]]; then
+            [[ "$enable_retry_log" == "true" ]] && echo "WARN: $1 final attempt failed (exit $exit_code)" >&2
+            return $exit_code
+        fi
+
+        # Calculate exponential backoff: base * 2^(attempt-1)
+        delay=$(awk "BEGIN {print $base_delay * (2 ^ ($attempt - 1))}")
+
+        # Apply jitter if enabled: random factor between 0.75 and 1.25
+        if [[ "$jitter" == "true" ]]; then
+            local jitter_factor
+            jitter_factor=$(awk "BEGIN {srand(); print 0.5 + rand()}")
+            delay=$(awk "BEGIN {print $delay * $jitter_factor}")
+        fi
+
+        # Cap at max_delay
+        if awk "BEGIN {exit !($delay > $max_delay)}"; then
+            delay=$max_delay
+        fi
+
+        [[ "$enable_retry_log" == "true" ]] && echo "[$label] Retry $attempt/$max_attempts for $1 failed (exit $exit_code), retrying in ${delay}s..." >&2
+        sleep "$delay"
+        attempt=$((attempt + 1))
+    done
+}
+
+# Model fallback system for agent roles
+# Priority: user-specified model -> fallback chain -> original default
+RUMINATION_MODEL_DEFAULT="google/gemini-2.5-flash"
+RUMINATION_MODEL_FALLBACK_1="qwen/qwen3.6-plus-preview:free"
+RUMINATION_MODEL_FALLBACK_2="nvidia/nemotron-3-nano-30b:free"
+RUMINATION_MODEL_FALLBACK_3="stepfun/step-3.5-flash:free"
+
+# Check if a model identifier is available on OpenRouter
+# Returns 0 if available, 1 if not
+aie_model_available() {
+    local model="$1"
+    local api_key="${LLM_API_KEY:-${OPENROUTER_API_KEY:-}}"
+    [[ -z "$api_key" ]] && return 1
+
+    # Use retry for API call
+    local response
+    response=$(aie_retry_call curl -sS -H "Authorization: Bearer $api_key" \
+        -H "Content-Type: application/json" \
+        "https://openrouter.ai/api/v1/models" 2>/dev/null) || return 1
+
+    # Check if model appears in the response
+    printf '%s' "$response" | grep -q "\"id\":\"$model\"" && return 0
+    # Also check for partial matches (some models may have suffixes)
+    printf '%s' "$response" | grep -q "\"id\":\"$model" && return 0
+
+    return 1
+}
+
+# Get the best available model for rumination
+# Priority: 1) user-specified model, 2) fallback_1, 3) fallback_2, 4) fallback_3, 5) original default
+aie_get_rumination_model() {
+    # Check for user-specified model in config
+    local config_model
+    config_model="$(aie_get "connectors.rumination.model" "")"
+    if [[ -n "$config_model" && "$config_model" != "$RUMINATION_MODEL_DEFAULT" ]]; then
+        if aie_model_available "$config_model"; then
+            echo "$config_model"
+            return 0
+        fi
+        echo "WARN: Configured rumination model '$config_model' not available, trying fallbacks" >&2
+    fi
+
+    # Try fallback chain
+    for fallback in "$RUMINATION_MODEL_FALLBACK_1" "$RUMINATION_MODEL_FALLBACK_2" "$RUMINATION_MODEL_FALLBACK_3"; do
+        if aie_model_available "$fallback"; then
+            echo "$fallback"
+            return 0
+        fi
+    done
+
+    # Finally, try the original default
+    if aie_model_available "$RUMINATION_MODEL_DEFAULT"; then
+        echo "$RUMINATION_MODEL_DEFAULT"
+        return 0
+    fi
+
+    # Nothing available - return a generic free model as last resort
+    echo "$RUMINATION_MODEL_FALLBACK_1"
+    return 1
+}
+
+# Observer observer model
+# Models optimized for fast, lightweight session summarization
+OBSERVER_MODEL_DEFAULT="qwen/qwen3.6-plus-preview:free"
+OBSERVER_MODEL_FALLBACK_1="qwen/qwen3-coder:free"
+OBSERVER_MODEL_FALLBACK_2="$RUMINATION_MODEL_FALLBACK_1"
+OBSERVER_MODEL_FALLBACK_3="$RUMINATION_MODEL_FALLBACK_3"
+
+# Get the best available model for observer
+# Priority: 1) user-config 2) observer_default 3) observer fb 4) rumination fb 5) rumination fb 6) return fb 1
+aie_get_observer_model() {
+    local config_model
+    config_model="$(aie_get "connectors.observer.model" "")"
+    if [[ -n "$config_model" && "$config_model" != "$OBSERVER_MODEL_DEFAULT" ]]; then
+        if aie_model_available "$config_model"; then
+            echo "$config_model"
+            return 0
+        fi
+        echo "WARN: Configured observer model '$config_model' not available, trying fallbacks" >&2
+    fi
+
+    for fallback in "$OBSERVER_MODEL_DEFAULT" "$OBSERVER_MODEL_FALLBACK_1" "$OBSERVER_MODEL_FALLBACK_2" "$OBSERVER_MODEL_FALLBACK_3" "$RUMINATION_MODEL_FALLBACK_1" "$RUMINATION_MODEL_FALLBACK_2" "$RUMINATION_MODEL_FALLBACK_3"; do
+        if aie_model_available "$fallback"; then
+            echo "$fallback"
+            return 0
+        fi
+    done
+
+    # Nothing available - return first rumination fallback as last resort
+    echo "$RUMINATION_MODEL_FALLBACK_1"
+    return 1
+}
+
+# Reflector reflector model
+# Models optimized for deep reasoning & consolidation
+REFLECTOR_MODEL_DEFAULT="nvidia/nemotron-3-super-120b-a12b:free"
+REFLECTOR_MODEL_FALLBACK_1="qwen/qwen3-next-80b-a3b-instruct:free"
+REFLECTOR_MODEL_FALLBACK_2="$RUMINATION_MODEL_FALLBACK_1"
+REFLECTOR_MODEL_FALLBACK_3="$RUMINATION_MODEL_FALLBACK_2"
+
+# Get the best available model for reflector
+# Priority: 1) user-config 2) reflector_default 3) reflector fb 4) reflector fb 5) rumination fb 6) rumination fb 7) return fb 1
+aie_get_reflector_model() {
+    local config_model
+    config_model="$(aie_get "connectors.reflector.model" "")"
+    if [[ -n "$config_model" && "$config_model" != "$REFLECTOR_MODEL_DEFAULT" ]]; then
+        if aie_model_available "$config_model"; then
+            echo "$config_model"
+            return 0
+        fi
+        echo "WARN: Configured reflector model '$config_model' not available, trying fallbacks" >&2
+    fi
+
+    for fallback in "$REFLECTOR_MODEL_DEFAULT" "$REFLECTOR_MODEL_FALLBACK_1" "$REFLECTOR_MODEL_FALLBACK_2" "$REFLECTOR_MODEL_FALLBACK_3" "$RUMINATION_MODEL_FALLBACK_1" "$RUMINATION_MODEL_FALLBACK_2" "$RUMINATION_MODEL_FALLBACK_3"; do
+        if aie_model_available "$fallback"; then
+            echo "$fallback"
+            return 0
+        fi
+    done
+
+    # Nothing available - return first rumination fallback as last resort
+    echo "$RUMINATION_MODEL_FALLBACK_1"
+    return 1
+}
+
+# Enrichment enrichment model
+# Models optimized for structured data processing
+ENRICHMENT_MODEL_DEFAULT="qwen/qwen3-coder:free"
+ENRICHMENT_MODEL_FALLBACK_1="qwen/qwen3.6-plus-preview:free"
+ENRICHMENT_MODEL_FALLBACK_2="$RUMINATION_MODEL_FALLBACK_3"
+
+# Get the best available model for enrichment
+# Priority: 1) user-config 2) enrichment_default 3) enrichment fb 4) enrichment fb 5) rumination fb 6) rumination fb 8) return fb 1
+aie_get_enrichment_model() {
+    local config_model
+    config_model="$(aie_get "connectors.enrichment.model" "")"
+    if [[ -n "$config_model" && "$config_model" != "$ENRICHMENT_MODEL_DEFAULT" ]]; then
+        if aie_model_available "$config_model"; then
+            echo "$config_model"
+            return 0
+        fi
+        echo "WARN: Configured enrichment model '$config_model' not available, trying fallbacks" >&2
+    fi
+
+    for fallback in "$ENRICHMENT_MODEL_DEFAULT" "$ENRICHMENT_MODEL_FALLBACK_1" "$ENRICHMENT_MODEL_FALLBACK_2" "$RUMINATION_MODEL_FALLBACK_1" "$RUMINATION_MODEL_FALLBACK_2" "$RUMINATION_MODEL_FALLBACK_3"; do
+        if aie_model_available "$fallback"; then
+            echo "$fallback"
+            return 0
+        fi
+    done
+
+    # Nothing available - return first rumination fallback as last resort
+    echo "$RUMINATION_MODEL_FALLBACK_1"
+    return 1
+}
+
+# Ambient ambient_actions model
+# Models optimized for quick utility calls
+AMBIENT_ACTIONS_MODEL_DEFAULT="stepfun/step-3.5-flash:free"
+AMBIENT_ACTIONS_MODEL_FALLBACK_1="qwen/qwen3-coder:free"
+AMBIENT_ACTIONS_MODEL_FALLBACK_2="$RUMINATION_MODEL_FALLBACK_3"
+
+# Get the best available model for ambient_actions
+# Priority: 1) user-config 2) ambient_actions_default 3) ambient_actions_fb 4) ambient_actions_fb 5) rumination fb 6) return fb 1
+aie_get_ambient_actions_model() {
+    local config_model
+    config_model="$(aie_get "connectors.ambient_actions.model" "")"
+    if [[ -n "$config_model" && "$config_model" != "$AMBIENT_ACTIONS_MODEL_DEFAULT" ]]; then
+        if aie_model_available "$config_model"; then
+            echo "$config_model"
+            return 0
+        fi
+        echo "WARN: Configured ambient_actions model '$config_model' not available, trying fallbacks" >&2
+    fi
+
+    for fallback in "$AMBIENT_ACTIONS_MODEL_DEFAULT" "$AMBIENT_ACTIONS_MODEL_FALLBACK_1" "$AMBIENT_ACTIONS_MODEL_FALLBACK_2" "$RUMINATION_MODEL_FALLBACK_1" "$RUMINATION_MODEL_FALLBACK_2" "$RUMINATION_MODEL_FALLBACK_3"; do
+        if aie_model_available "$fallback"; then
+            echo "$fallback"
+            return 0
+        fi
+    done
+
+    # Nothing available - return first rumination fallback as last resort
+    echo "$RUMINATION_MODEL_FALLBACK_1"
+    return 1
+}
+
+# Dream Cycle model - for creative/surreal ideation
+DREAM_CYCLE_MODEL_DEFAULT="nousresearch/hermes-3-llama-3.1-405b:free"
+DREAM_CYCLE_MODEL_FALLBACK_1="qwen/qwen3-next-80b-a3b-instruct:free"
+DREAM_CYCLE_MODEL_FALLBACK_2="nvidia/nemotron-3-super-120b-a12b:free"
+DREAM_CYCLE_MODEL_FALLBACK_3="qwen/qwen3.6-plus-preview:free"
+
+aie_get_dream_cycle_model() {
+    local config_model
+    config_model="$(aie_get "connectors.dream.model" "")"
+    if [[ -n "$config_model" && "$config_model" != "$DREAM_CYCLE_MODEL_DEFAULT" ]]; then
+        if aie_model_available "$config_model"; then
+            echo "$config_model"
+            return 0
+        fi
+        echo "WARN: Configured dream model '$config_model' not available, trying fallbacks" >&2
+    fi
+
+    for fallback in "$DREAM_CYCLE_MODEL_DEFAULT" "$DREAM_CYCLE_MODEL_FALLBACK_1" "$DREAM_CYCLE_MODEL_FALLBACK_2" "$DREAM_CYCLE_MODEL_FALLBACK_3"; do
+        if aie_model_available "$fallback"; then
+            echo "$fallback"
+            return 0
+        fi
+    done
+
+    for fallback in "$RUMINATION_MODEL_FALLBACK_1" "$RUMINATION_MODEL_FALLBACK_2" "$RUMINATION_MODEL_FALLBACK_3"; do
+        if aie_model_available "$fallback"; then
+            echo "$fallback"
+            return 0
+        fi
+    done
+
+    echo "$DREAM_CYCLE_MODEL_DEFAULT"
+    return 1
+}
+
+# Generic model getter for any role
+aie_get_model_for_role() {
+    local role="$1"
+    case "$role" in
+        observer) aie_get_observer_model ;;
+        reflector) aie_get_reflector_model ;;
+        rumination|ruminate) aie_get_rumination_model ;;
+        enrichment) aie_get_enrichment_model ;;
+        ambient_actions|ambient) aie_get_ambient_actions_model ;;
+        dream|dream_cycle) aie_get_dream_cycle_model ;;
+        classification) aie_get_classification_model ;;
+        *) echo "google/gemini-2.5-flash" ;;
+    esac
 }

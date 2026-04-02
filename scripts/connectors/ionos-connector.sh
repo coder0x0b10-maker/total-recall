@@ -142,10 +142,12 @@ if ! [[ "$IONOS_MAX_MESSAGES" =~ ^[0-9]+$ ]] || ((IONOS_MAX_MESSAGES < 1)); then
 fi
 
 health_check() {
-  if ! run_timeout "$HIMALAYA_TIMEOUT_SEC" himalaya envelope list --account "$IONOS_ACCOUNT" --max-width 200 -s 1 >/dev/null 2>&1; then
-    log "ERROR: health_check failed — himalaya ionos unreachable"
+  # Use retry for health check to handle transient failures
+  local health_output
+  health_output=$(aie_retry_call run_timeout "$HIMALAYA_TIMEOUT_SEC" himalaya envelope list --account "$IONOS_ACCOUNT" --max-width 200 -s 1) || {
+    log "ERROR: health_check failed — himalaya ionos unreachable after retries"
     return 1
-  fi
+  }
   log "health_check OK"
 }
 
@@ -212,7 +214,7 @@ parse_ionos_header_field() {
 
 ionos_fetch_message_raw() {
   local msg_id="$1"
-  run_timeout "$HIMALAYA_TIMEOUT_SEC" himalaya message read "$msg_id" --account "$IONOS_ACCOUNT" 2>/dev/null || true
+  aie_retry_call run_timeout "$HIMALAYA_TIMEOUT_SEC" himalaya message read "$msg_id" --account "$IONOS_ACCOUNT" || true
 }
 
 ionos_fetch_message_headers() {
@@ -431,7 +433,7 @@ call_openrouter_batch() {
 fetch_envelopes_json() {
   local raw
 
-  raw=$(run_timeout "$HIMALAYA_TIMEOUT_SEC" himalaya envelope list --account "$IONOS_ACCOUNT" --max-width 500 -s "$IONOS_MAX_MESSAGES" --output json 2>/dev/null || true)
+  raw=$(aie_retry_call run_timeout "$HIMALAYA_TIMEOUT_SEC" himalaya envelope list --account "$IONOS_ACCOUNT" --max-width 500 -s "$IONOS_MAX_MESSAGES" --output json) || true
   if [[ -n "$raw" ]] && printf '%s' "$raw" | jq -e 'type == "array"' >/dev/null 2>&1; then
     printf '%s' "$raw" | jq -c '
       [ .[]
@@ -455,7 +457,7 @@ fetch_envelopes_json() {
   fi
 
   local table
-  table=$(run_timeout "$HIMALAYA_TIMEOUT_SEC" himalaya envelope list --account "$IONOS_ACCOUNT" --max-width 500 -s "$IONOS_MAX_MESSAGES" 2>/dev/null || true)
+  table=$(aie_retry_call run_timeout "$HIMALAYA_TIMEOUT_SEC" himalaya envelope list --account "$IONOS_ACCOUNT" --max-width 500 -s "$IONOS_MAX_MESSAGES") || true
   [[ -z "$table" ]] && { echo '[]'; return 1; }
 
   local tmp_lines line n i

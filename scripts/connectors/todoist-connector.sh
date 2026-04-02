@@ -32,10 +32,11 @@ if ! aie_bool "connectors.todoist.enabled"; then
 fi
 
 health_check() {
-  if ! todoist tasks --all --json >/dev/null 2>&1; then
-    log "ERROR: health_check failed — todoist CLI unreachable (auth?)"
+  local health_output
+  health_output=$(aie_retry_call todoist tasks --all --json) || {
+    log "ERROR: health_check failed — todoist CLI unreachable after retries"
     exit 1
-  fi
+  }
   log "health_check OK"
 }
 
@@ -115,7 +116,8 @@ process_tasks() {
 }
 
 # Fetch all tasks and filter locally (more reliable than --filter flag)
-ALL_TASKS=$(todoist tasks --all --json 2>/dev/null || echo "[]")
+# Use retry for API call to todoist
+ALL_TASKS=$(aie_retry_call todoist tasks --all --json) || ALL_TASKS="[]"
 
 # Overdue: has a due date before today, not completed
 OVERDUE=$(echo "$ALL_TASKS" | jq --arg today "$TODAY" \
