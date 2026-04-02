@@ -10,6 +10,7 @@ set -uo pipefail
 # ─── Configuration ───────────────────────────────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/aie-config.sh"
+source "$SCRIPT_DIR/_metrics.sh"
 aie_init
 aie_load_env
 source "$SCRIPT_DIR/aie-tools.sh"
@@ -63,6 +64,7 @@ done
 
 # ─── Logging ─────────────────────────────────────────────────────────────────
 mkdir -p "$RUMINATION_DIR" "$(dirname "$LOG")"
+metrics_init "$WORKSPACE"
 
 log() {
   local msg="[$(date -u +%Y-%m-%dT%H:%M:%SZ)] [rumination] $*"
@@ -73,6 +75,7 @@ log() {
 }
 
 log "=== Rumination engine START (trigger=$TRIGGER, dry_run=$DRY_RUN) ==="
+stage_start "rumination_total"
 
 # ─── Cooldown check ──────────────────────────────────────────────────────────
 if [[ "$TRIGGER" != "scheduled_morning" && "$TRIGGER" != "scheduled_evening" ]]; then
@@ -319,6 +322,7 @@ PAYLOAD=$(jq -cn \
   }')
 
 # Make the API call
+stage_start "llm_rumination"
 if [[ "${USE_ANTHROPIC:-false}" == "true" ]]; then
   # Direct Anthropic API
   HTTP_RESP=$(curl -s -w "\n__STATUS__:%{http_code}" \
@@ -383,6 +387,7 @@ else
   LLM_TEXT=$(echo "$BODY" | jq -r '.choices[0].message.content // empty' 2>/dev/null)
   TOKENS_USED=$(echo "$BODY" | jq -r '(.usage.prompt_tokens // 0) + (.usage.completion_tokens // 0)' 2>/dev/null || echo 0)
 fi
+stage_end "llm_rumination" "{\"model\":\"$(_json_safe "$MODEL")\",\"tokens\":$TOKENS_USED,\"status\":\"ok\"}"
 
 log "LLM response received (tokens: $TOKENS_USED)"
 
@@ -495,7 +500,9 @@ ${NOTES_FOR_CLASS:-No insights available.}
 "
 
 log "Running classification (model: $CLASSIFICATION_MODEL)..."
+stage_start "llm_classification"
 CLASS_RAW=$(call_openrouter "$CLASS_PROMPT" 900 0.2 "Rumination Classification" "$CLASSIFICATION_MODEL" 2>/dev/null || echo "")
+stage_end "llm_classification" "{\"model\":\"$(_json_safe "$CLASSIFICATION_MODEL")\",\"tokens\":$TOKENS_USED,\"status\":\"$([ -n "$CLASS_RAW" ] && echo ok || echo failed)\"}"
 CLASS_TOKENS="$TOKENS_USED"
 
 if [[ -n "$CLASS_RAW" ]]; then
@@ -532,6 +539,7 @@ BUDGET_REMAINING="${ACTION_BUDGET_SECONDS:-60}"
 
 CANDIDATE_COUNT=$(echo "$CANDIDATE_ACTIONS" | jq 'length' 2>/dev/null || echo 0)
 log "Executing $CANDIDATE_COUNT lookups (budget: ${BUDGET_REMAINING}s)"
+stage_start "lookup_execution"
 
 for i in $(seq 0 $((CANDIDATE_COUNT - 1))); do
   # Check time budget
@@ -616,6 +624,7 @@ for i in $(seq 0 $((CANDIDATE_COUNT - 1))); do
   LOOKUP_ENTRIES=$(echo "$LOOKUP_ENTRIES" | jq -c \
     --argjson entry "$LOOKUP_ENTRY" '. + [$entry]' 2>/dev/null || echo "$LOOKUP_ENTRIES")
 done
+stage_end "lookup_execution" "{\"candidates\":$CANDIDATE_COUNT,\"executed\":$EXEC_COUNT}"
 
 EXEC_COUNT=$(echo "$ACTION_RESULTS" | jq 'length' 2>/dev/null || echo 0)
 log "Lookup execution complete: $EXEC_COUNT results collected"
@@ -652,7 +661,9 @@ ${RESULTS_SUMMARY}
 "
 
   log "Running enrichment (model: $ENRICHMENT_MODEL)..."
+  stage_start "llm_enrichment"
   ENRICH_RAW=$(call_openrouter "$ENRICH_PROMPT" 1200 0.2 "Rumination Enrichment" "$ENRICHMENT_MODEL" 2>/dev/null || echo "")
+  stage_end "llm_enrichment" "{\"model\":\"$(_json_safe "$ENRICHMENT_MODEL")\",\"tokens\":$TOKENS_USED,\"status\":\"$([ -n "$ENRICH_RAW" ] && echo ok || echo failed)\"}"
   ENRICH_TOKENS="$TOKENS_USED"
 
   if [[ -n "$ENRICH_RAW" ]]; then
@@ -890,7 +901,14 @@ else
   if [[ -f "$PRECONSCIOUS_SCRIPT" ]]; then
     timeout 90 bash "$PRECONSCIOUS_SCRIPT" >> "$LOG" 2>&1 || log "WARN: preconscious-select trigger failed"
   fi
+
+  # ─── Rumination run complete ────────────────────────────────────────────────
+  local _rum_notes
+  _rum_notes=$(echo "$RUMINATION_NOTES" | jq 'length' 2>/dev/null || echo 0)
+  metrics_record "events_processed" "$EVENT_COUNT"
+  metrics_record "tokens_used" "$TOKENS_USED"
+  metrics_record "rumination_notes" "$_rum_notes"
+  metrics_flush "rumination" "{\"events\":$EVENT_COUNT,\"tokens\":$TOKENS_USED,\"notes\":$_rum_notes,\"trigger\":\"$TRIGGER\"}"
 fi
 
 log "=== Rumination engine END ==="
-exit 0

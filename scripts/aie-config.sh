@@ -76,8 +76,8 @@ defaults = {
             "max_attempts": 3,
             "base_delay": 1.0,
             "max_delay": 10.0,
-            "jitter": true,
-            "log_retries": true,
+            "jitter": True,
+            "log_retries": True,
             "label": "total-recall",
         },
         "calendar": {

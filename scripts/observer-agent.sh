@@ -9,6 +9,7 @@ set -euo pipefail
 SKILL_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 source "$SKILL_DIR/scripts/_compat.sh"
 source "$SKILL_DIR/scripts/aie-config.sh"
+source "$SKILL_DIR/scripts/_metrics.sh"
 aie_init
 
 WORKSPACE="${OPENCLAW_WORKSPACE:-$(cd "$SKILL_DIR/../.." && pwd)}"
@@ -18,7 +19,7 @@ SESSIONS_DIR="${SESSIONS_DIR:-$HOME/.openclaw/agents/main/sessions}"
 # LLM provider configuration (OpenAI-compatible APIs)
 LLM_BASE_URL="${LLM_BASE_URL:-https://openrouter.ai/api/v1}"
 LLM_API_KEY="${LLM_API_KEY:-${OPENROUTER_API_KEY:-}}"
-LLM_MODEL="${LLM_MODEL:-$(aie_get_observer_model)}"
+LLM_MODEL="${LLM_MODEL:-$(aie_get_observer_model || true)}"
 
 # Backward-compatible: env var overrides centralized config
 if [ -n "${OBSERVER_MODEL:-}" ]; then
@@ -56,12 +57,14 @@ LLM_MODEL="${LLM_MODEL:-deepseek/deepseek-v3.2}"
 OBSERVER_MODEL="${OBSERVER_MODEL:-stepfun/step-3.5-flash:free}"
 
 mkdir -p "$WORKSPACE/logs" "$MEMORY_DIR"
+metrics_init "$WORKSPACE"
 
 log() {
   echo "$(date '+%Y-%m-%d %H:%M:%S') $1" >> "$OBSERVER_LOG"
 }
 
 log "Observer agent starting"
+stage_start "observer_total"
 
 # --- Validate prompt file exists ---
 if [ ! -f "$OBSERVER_PROMPT" ]; then
@@ -126,6 +129,7 @@ else
 fi
 
 # --- Find recently modified transcripts (skip subagent/cron/topic sessions) ---
+stage_start "transcript_discovery"
 if [ "$RECOVER_MODE" = true ] && [ -f "$RECOVER_FILE" ]; then
   TRANSCRIPTS="$RECOVER_FILE"
   log "Recovery mode: using $RECOVER_FILE"
@@ -143,12 +147,17 @@ fi
 
 if [ -z "${TRANSCRIPTS:-}" ]; then
   log "No recently modified transcripts, exiting"
+  stage_end "transcript_discovery"
+  metrics_record "transcripts_found" 0
+  metrics_flush "observer" '{"status":"no_transcripts"}'
   echo "NO_OBSERVATIONS"
   exit 0
 fi
 
 TRANSCRIPT_COUNT=$(echo "$TRANSCRIPTS" | wc -l)
 log "Found $TRANSCRIPT_COUNT active transcripts"
+stage_end "transcript_discovery"
+metrics_record "transcripts_found" "$TRANSCRIPT_COUNT"
 
 # --- Calculate cutoff (portable) ---
 CUTOFF_ISO=$(date_minutes_ago "$LOOKBACK_MIN")
@@ -156,6 +165,7 @@ CUTOFF_ISO=$(date_minutes_ago "$LOOKBACK_MIN")
 # --- Extract recent meaningful messages ---
 TMPMSGS=$(mktemp)
 
+stage_start "message_extract"
 echo "$TRANSCRIPTS" | while IFS= read -r transcript; do
   [ -z "$transcript" ] && continue
   tail -150 "$transcript" 2>/dev/null | jq -r --arg cutoff "$CUTOFF_ISO" '
@@ -179,24 +189,30 @@ echo "$TRANSCRIPTS" | while IFS= read -r transcript; do
     "[\($time)] \($who): \($text[0:500])"
   ' 2>/dev/null >> "$TMPMSGS" || true
 done
+stage_end "message_extract"
 
 RECENT_MESSAGES=$(cat "$TMPMSGS" | grep -v "^$" | head -150 || true)
 
 LINE_COUNT=$(echo "$RECENT_MESSAGES" | grep -c "." || true)
 if [ "$LINE_COUNT" -lt 2 ]; then
   log "Only $LINE_COUNT meaningful lines — skipping"
+  metrics_record "lines_extracted" "$LINE_COUNT"
+  stage_end "hash_dedup"
   date +%s > "$MARKER_FILE"
+  metrics_flush "observer" '{"status":"too_few_lines"}'
   echo "NO_OBSERVATIONS"
   exit 0
 fi
 
 # --- Dedup check (hash comparison) — skip in flush mode ---
+stage_start "hash_dedup"
 CURRENT_HASH=$(echo "$RECENT_MESSAGES" | md5_hash)
 if [ "$FLUSH_MODE" = false ] && [ -f "$HASH_FILE" ]; then
   LAST_HASH=$(cat "$HASH_FILE")
   if [ "$CURRENT_HASH" = "$LAST_HASH" ]; then
     log "Messages unchanged since last run (hash match) — skipping"
     date +%s > "$MARKER_FILE"
+    metrics_flush "observer" '{"status":"hash_dedup_skip"}'
     echo "NO_OBSERVATIONS"
     exit 0
   fi
@@ -249,10 +265,12 @@ log "DEBUG: LLM_MODEL is $LLM_MODEL"
 log "DEBUG: OBSERVER_MODEL is $OBSERVER_MODEL"
 MODELS=("$OBSERVER_MODEL" "$OBSERVER_FALLBACK_MODEL")
 OBSERVATION=""
+stage_start "llm_call"
 for ATTEMPT in 1 2; do
+  stage_start "llm_attempt_${ATTEMPT}"
   MODEL="${MODELS[$((ATTEMPT-1))]}"
   ATTEMPT_PAYLOAD=$(echo "$PAYLOAD" | jq --arg m "$MODEL" '.model = $m')
-  
+
   log "DEBUG: Making LLM call with model: $MODEL, attempt: $ATTEMPT"
   RESPONSE=$(curl -s --max-time 60 "$LLM_BASE_URL/chat/completions" \
     -H "Authorization: Bearer $LLM_API_KEY" \
@@ -263,7 +281,7 @@ for ATTEMPT in 1 2; do
 
   CONTENT=$(echo "$RESPONSE" | jq -r '.choices[0].message.content // empty' 2>/dev/null)
   REASONING=$(echo "$RESPONSE" | jq -r '.choices[0].message.reasoning // empty' 2>/dev/null)
-  
+
   # Use content if not empty and not just whitespace, otherwise fall back to reasoning
   if [ -n "$CONTENT" ] && [ "$CONTENT" != "null" ] && [ "$CONTENT" != "" ] && [[ "$CONTENT" =~ [^[:space:]] ]]; then
     OBSERVATION="$CONTENT"
@@ -273,8 +291,15 @@ for ATTEMPT in 1 2; do
     OBSERVATION=""
   fi
 
+  RESP_SIZE=${#RESPONSE}
+  local_status="failed"
   if [ -n "$OBSERVATION" ]; then
     log "Success with model $MODEL on attempt $ATTEMPT"
+    local_status="ok"
+  fi
+  stage_end "llm_attempt_${ATTEMPT}" "{\"model\":\"$(_json_safe "$MODEL")\",\"attempt\":$ATTEMPT,\"response_size\":$RESP_SIZE,\"status\":\"$local_status\"}"
+
+  if [ -n "$OBSERVATION" ]; then
     break
   fi
 
@@ -283,15 +308,18 @@ for ATTEMPT in 1 2; do
 
   [ "$ATTEMPT" -lt 2 ] && sleep 3
 done
+stage_end "llm_call" "{\"final_model\":\"$(_json_safe "$MODEL")\",\"attempts\":$ATTEMPT,\"got_observation\":$([ -n "$OBSERVATION" ] && echo true || echo false)}"
 
 if [ -z "$OBSERVATION" ] || echo "$OBSERVATION" | grep -qi "NO_OBSERVATIONS"; then
   log "No notable observations after LLM call"
   date +%s > "$MARKER_FILE"
+  metrics_flush "observer" '{"status":"llm_no_observations"}'
   echo "NO_OBSERVATIONS"
   exit 0
 fi
 
 # --- Post-LLM dedup: remove lines whose key content already exists ---
+stage_start "post_llm_dedup"
 if [ -f "$OBSERVATIONS_FILE" ]; then
   # Build fingerprints: strip bullets/emoji/timestamps/markdown, take first 40 chars
   # LC_ALL=C ensures cut operates on bytes consistently across locales
@@ -319,19 +347,20 @@ if [ -f "$OBSERVATIONS_FILE" ]; then
 
   OBSERVATION=$(echo "$DEDUPED" | sed '/^$/N;/^\n$/d')
 
-  # If everything was deduped, nothing to write
-  if [ -z "$(echo "$OBSERVATION" | grep -E '[🔴🟡🟢]')" ]; then
-    log "All observations were duplicates — nothing new to write"
-    echo "$CURRENT_HASH" > "$HASH_FILE"
-    date +%s > "$MARKER_FILE"
-    echo "NO_OBSERVATIONS"
-    exit 0
-  fi
-
   fi # end of EXISTING_FP guard
 fi
+DEDUP_LINES=$(echo "$OBSERVATION" | grep -cE '^\s*-\s*[🔴🟡🟢]' || true)
+stage_end "post_llm_dedup" "{\"dedup_lines\":$DEDUP_LINES}"
 
-# --- Append to observations file ---
+# If everything was deduped, nothing to write
+if [ -z "$(echo "$OBSERVATION" | grep -E '[🔴🟡🟢]')" ]; then
+  log "All observations were duplicates — nothing new to write"
+  echo "$CURRENT_HASH" > "$HASH_FILE"
+  date +%s > "$MARKER_FILE"
+  metrics_flush "observer" '{"status":"all_deduped"}'
+  echo "NO_OBSERVATIONS"
+  exit 0
+fi
 if [ ! -f "$OBSERVATIONS_FILE" ]; then
   cat > "$OBSERVATIONS_FILE" << 'EOF'
 # Observations Log
@@ -360,16 +389,25 @@ OBS_WORDS=$(wc -w < "$OBSERVATIONS_FILE")
 log "Observations appended. Total: $OBS_WORDS words (~$((OBS_WORDS * 4 / 3)) tokens)"
 
 # --- Trigger reflector if needed ---
+stage_start "reflector_trigger"
 if [ "$OBS_WORDS" -gt "$REFLECTOR_WORD_THRESHOLD" ]; then
   log "Reflection recommended ($OBS_WORDS words)"
   echo $$ > "$LOCK_FILE"
+  stage_end "reflector_trigger" '{"reflector_triggered":true}'
   if bash "$SKILL_DIR/scripts/reflector-agent.sh" 2>/dev/null; then
     echo "REFLECTION_COMPLETE"
+    metrics_record "reflector_run" 1 '{"status":"ok"}'
   else
     log "Reflector failed, observations kept as-is"
     echo "OBSERVATIONS_ADDED"
+    metrics_record "reflector_run" 1 '{"status":"failed"}'
   fi
   rm -f "$LOCK_FILE"
 else
   echo "OBSERVATIONS_ADDED"
+  metrics_record "reflector_triggered" 0
 fi
+
+# --- Observer run complete ---
+metrics_record "total_words" "$OBS_WORDS"
+metrics_record "lines_extracted" "$LINE_COUNT"

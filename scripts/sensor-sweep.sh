@@ -7,6 +7,7 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/aie-config.sh"
+source "$SCRIPT_DIR/_metrics.sh"
 aie_init
 
 WORKSPACE="$AIE_WORKSPACE"
@@ -30,7 +31,9 @@ log() {
 # Ensure directories and files exist (H2 fix)
 mkdir -p "$(dirname "$LOG")" "$(dirname "$BUS")" "$AIE_SENSOR_STATE_DIR"
 touch "$LOG" "$BUS"
+metrics_init "$WORKSPACE"
 
+stage_start "sensor_sweep_total"
 log "=== Sensor sweep START${DRY_RUN:+ (DRY-RUN)} ==="
 
 EVENTS_BEFORE=$(wc -l < "$BUS" 2>/dev/null || echo 0)
@@ -38,6 +41,8 @@ EVENTS_BEFORE=$(wc -l < "$BUS" 2>/dev/null || echo 0)
 run_connector() {
   local name="$1"
   local script="$CONNECTOR_DIR/${name}-connector.sh"
+  local _conn_start
+  _conn_start=$(time_now_ms)
   if [[ ! -f "$script" ]]; then
     log "SKIP $name — connector not found at $script"
     return
@@ -49,11 +54,16 @@ run_connector() {
   log "Running $name connector..."
   bash "$script" ${DRY_RUN:+$DRY_RUN} 2>&1 | while IFS= read -r line; do log "  [$name] $line"; done
   local exit_code="${PIPESTATUS[0]}"
+  local _conn_end
+  _conn_end=$(time_now_ms)
+  local _conn_ms=$(( _conn_end - _conn_start ))
+  [[ $_conn_ms -lt 0 ]] && _conn_ms=0
   if [[ "$exit_code" -eq 0 ]]; then
-    log "$name OK"
+    log "$name OK ($((_conn_ms))ms)"
   else
     log "WARN $name exited $exit_code (non-fatal, continuing sweep)"
   fi
+  metrics_record "connector_duration_ms" "$_conn_ms" "{\"connector\":\"$(_json_safe "$name")\",\"exit_code\":$exit_code}"
 }
 
 run_connector "calendar"
@@ -100,3 +110,7 @@ if [[ $NEW_EVENTS -gt 0 && -z "$DRY_RUN" ]]; then
 fi
 
 log "=== Sensor sweep END ==="
+stage_end "sensor_sweep_total"
+metrics_record "events_emitted" "$NEW_EVENTS"
+metrics_record "events_pruned" "${PRUNED:-0}"
+metrics_flush "sensor_sweep" "{\"events\":$NEW_EVENTS,\"pruned\":${PRUNED:-0}}"

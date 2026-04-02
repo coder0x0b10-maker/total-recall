@@ -193,4 +193,9 @@ else
   log "Buffer written to $OUTPUT ($WORD_COUNT words)"
 fi
 
+metrics_record "notes_collected" "$NOTE_COUNT"
+metrics_record "buffer_word_count" "${WORD_COUNT:-0}"
+stage_end "preconscious_total"
+metrics_flush "preconscious" "{\"notes\":$NOTE_COUNT,\"words\":${WORD_COUNT:-0}}"
+
 log "=== Preconscious buffer END ==="

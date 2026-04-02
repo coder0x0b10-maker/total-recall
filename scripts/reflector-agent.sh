@@ -9,6 +9,7 @@ set -euo pipefail
 SKILL_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 source "$SKILL_DIR/scripts/_compat.sh"
 source "$SKILL_DIR/scripts/aie-config.sh"
+source "$SKILL_DIR/scripts/_metrics.sh"
 aie_init
 
 WORKSPACE="${OPENCLAW_WORKSPACE:-$(cd "$SKILL_DIR/../.." && pwd)}"
@@ -17,7 +18,7 @@ MEMORY_DIR="${MEMORY_DIR:-$WORKSPACE/memory}"
 # LLM provider configuration (OpenAI-compatible APIs)
 LLM_BASE_URL="${LLM_BASE_URL:-https://openrouter.ai/api/v1}"
 LLM_API_KEY="${LLM_API_KEY:-${OPENROUTER_API_KEY:-}}"
-LLM_MODEL="${LLM_MODEL:-$(aie_get_reflector_model)}"
+LLM_MODEL="${LLM_MODEL:-$(aie_get_reflector_model || true)}"
 
 # Backward-compatible: env var overrides centralized config
 if [ -n "${REFLECTOR_MODEL:-}" ]; then
@@ -56,12 +57,14 @@ fi
 REFLECTOR_FALLBACK_MODEL="${REFLECTOR_FALLBACK_MODEL:-openrouter/hunter-alpha}"
 
 mkdir -p "$WORKSPACE/logs" "$BACKUP_DIR"
+metrics_init "$WORKSPACE"
 
 log() {
   echo "$(date '+%Y-%m-%d %H:%M:%S') $1" >> "$REFLECTOR_LOG"
 }
 
 log "Reflector agent starting"
+stage_start "reflector_total"
 
 # --- Lock check (prevent concurrent reflector runs) ---
 if [ -f "$LOCK_FILE" ]; then
@@ -92,6 +95,8 @@ log "Current observations: $OBS_WORDS words"
 
 if [ "$OBS_WORDS" -lt "$REFLECTOR_WORD_THRESHOLD" ]; then
   log "Under threshold ($OBS_WORDS < $REFLECTOR_WORD_THRESHOLD words), skipping"
+  metrics_record "reflector_words_before" "$OBS_WORDS"
+  metrics_flush "reflector" '{"status":"below_threshold"}'
   exit 0
 fi
 
@@ -127,18 +132,20 @@ REFLECTED=""
 MODELS=("$REFLECTOR_MODEL" "$REFLECTOR_FALLBACK_MODEL")
 for ATTEMPT in 1 2; do
   MODEL="${MODELS[$((ATTEMPT-1))]}"
-  
+
   # Update payload with current model
   ATTEMPT_PAYLOAD=$(echo "$PAYLOAD" | jq --arg m "$MODEL" '.model = $m')
 
+  stage_start "llm_attempt_${ATTEMPT}"
   RESPONSE=$(curl -s --max-time 120 "$LLM_BASE_URL/chat/completions" \
     -H "Authorization: Bearer $LLM_API_KEY" \
     -H "Content-Type: application/json" \
     -d "$ATTEMPT_PAYLOAD" 2>/dev/null)
+  RESP_SIZE=${#RESPONSE}
 
   CONTENT=$(echo "$RESPONSE" | jq -r '.choices[0].message.content // empty' 2>/dev/null)
   REASONING=$(echo "$RESPONSE" | jq -r '.choices[0].message.reasoning // empty' 2>/dev/null)
-  
+
   # Use content if not empty and not just whitespace, otherwise fall back to reasoning
   if [ -n "$CONTENT" ] && [ "$CONTENT" != "null" ] && [ "$CONTENT" != "" ] && [[ "$CONTENT" =~ [^[:space:]] ]]; then
     REFLECTED="$CONTENT"
@@ -147,7 +154,11 @@ for ATTEMPT in 1 2; do
   else
     REFLECTED=""
   fi
-  
+
+  llm_status="failed"
+  [ -n "$REFLECTED" ] && llm_status="ok"
+  stage_end "llm_attempt_${ATTEMPT}" "{\"model\":\"$(_json_safe "$MODEL")\",\"attempt\":$ATTEMPT,\"response_size\":$RESP_SIZE,\"status\":\"$llm_status\"}"
+
   [ -n "$REFLECTED" ] && break
 
   ERROR=$(echo "$RESPONSE" | jq -r '.error.message // empty' 2>/dev/null)
@@ -157,12 +168,14 @@ done
 
 if [ -z "$REFLECTED" ]; then
   log "ERROR: Reflector returned empty response after retries"
+  metrics_flush "reflector" '{"status":"llm_failed"}'
   exit 1
 fi
 
 REFLECTED_WORDS=$(echo "$REFLECTED" | wc -w)
 if [ "$REFLECTED_WORDS" -gt "$OBS_WORDS" ]; then
   log "WARNING: Reflection ($REFLECTED_WORDS words) is LARGER than input ($OBS_WORDS words) — keeping original"
+  metrics_flush "reflector" '{"status":"reflection_exceeded_input_size"}'
   exit 1
 fi
 
@@ -189,5 +202,10 @@ log "Reflection complete. $OBS_WORDS → $NEW_WORDS words ($REDUCTION% reduction
 find "$BACKUP_DIR" -name "observations-*.md" -type f | sort -r | tail -n +11 | while IFS= read -r old; do
   rm -f "$old"
 done
+
+metrics_record "words_before" "$OBS_WORDS"
+metrics_record "words_after" "$NEW_WORDS"
+metrics_record "reduction_pct" "$REDUCTION"
+metrics_flush "reflector" "{\"status\":\"ok\",\"words_before\":$OBS_WORDS,\"words_after\":$NEW_WORDS,\"reduction_pct\":$REDUCTION}"
 
 echo "REFLECTION_COMPLETE"
