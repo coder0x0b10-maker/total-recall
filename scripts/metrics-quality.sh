@@ -11,7 +11,6 @@ set -euo pipefail
 
 SKILL_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 source "$SKILL_DIR/scripts/_compat.sh"
-source "$SKILL_DIR/scripts/_metrics.sh"
 
 WORKSPACE="${OPENCLAW_WORKSPACE:-$(cd "$SKILL_DIR/../.." && pwd)}"
 MEMORY_DIR="${MEMORY_DIR:-$WORKSPACE/memory}"
@@ -24,13 +23,7 @@ mkdir -p "$SNAPSHOTS_DIR" "$QUALITY_DIR"
 # ─── Helpers ─────────────────────────────────────────────────────────────────
 
 count_obs_lines() {
-    # Count observation lines (emoji-prefixed bullets)
     grep -cE '^\s*-\s*[🔴🟡🟢]' "$1" 2>/dev/null || echo 0
-}
-
-count_type() {
-    # Count observations of a given dc:type
-    grep -oP 'dc:type=\K\w+' "$1" 2>/dev/null | grep -c "^$1$" 2>/dev/null || echo 0
 }
 
 json_file() {
@@ -51,13 +44,11 @@ cmd_snapshot() {
 
     cp "$OBSERVATIONS_FILE" "$snap_file"
 
-    # Collect stats
     local total_lines word_count obs_count
     total_lines=$(wc -l < "$OBSERVATIONS_FILE")
     word_count=$(wc -w < "$OBSERVATIONS_FILE")
     obs_count=$(count_obs_lines "$OBSERVATIONS_FILE")
 
-    # Type distribution
     local type_fact type_pref type_goal type_habit type_event type_rule type_context type_untagged
     type_fact=$(grep -oP 'dc:type=\Kfact\b' "$OBSERVATIONS_FILE" 2>/dev/null | wc -l || echo 0)
     type_pref=$(grep -oP 'dc:type=\Kpreference\b' "$OBSERVATIONS_FILE" 2>/dev/null | wc -l || echo 0)
@@ -68,7 +59,6 @@ cmd_snapshot() {
     type_context=$(grep -oP 'dc:type=\Kcontext\b' "$OBSERVATIONS_FILE" 2>/dev/null | wc -l || echo 0)
     type_untagged=$(( obs_count - type_fact - type_pref - type_goal - type_habit - type_event - type_rule - type_context ))
 
-    # Importance distribution
     local imp_tagged
     imp_tagged=$(grep -cP 'dc:importance=\d' "$OBSERVATIONS_FILE" 2>/dev/null || echo 0)
 
@@ -121,7 +111,6 @@ cmd_diff() {
     local snap_b="${2:-}"
 
     if [[ -z "$snap_a" ]]; then
-        # Find two most recent snapshots
         local snaps
         snaps=$(ls -1 "$SNAPSHOTS_DIR"/*.md 2>/dev/null | tail -2)
         local count
@@ -152,7 +141,6 @@ cmd_diff() {
     local added=$(( obs_b - obs_a ))
     local word_diff=$(( wc_b - wc_a ))
 
-    # Extract observation bodies for comparison
     local bodies_a bodies_b
     bodies_a=$(grep -E '^\s*-\s*[🔴🟡🟢]' "$snap_a" | sed 's/^[[:space:]]*-[[:space:]]*[🔴🟡🟢][[:space:]]*[0-9:]*[[:space:]]*//' | sed 's/\*\*//g' | sort -u || true)
     bodies_b=$(grep -E '^\s*-\s*[🔴🟡🟢]' "$snap_b" | sed 's/^[[:space:]]*-[[:space:]]*[🔴🟡🟢][[:space:]]*[0-9:]*[[:space:]]*//' | sed 's/\*\*//g' | sort -u || true)
@@ -162,7 +150,6 @@ cmd_diff() {
     new=$(comm -13 <(echo "$bodies_a") <(echo "$bodies_b") | wc -l || echo 0)
     removed=$(comm -23 <(echo "$bodies_a") <(echo "$bodies_b") | wc -l || echo 0)
 
-    # Type distribution changes
     for t in fact preference goal habit event rule context; do
         local ta tb
         ta=$(grep -oP "dc:type=\K${t}\b" "$snap_a" 2>/dev/null | wc -l || echo 0)
@@ -193,9 +180,7 @@ cmd_score() {
         exit 1
     fi
 
-    jq -nc \
-        --argjson score 0 \
-        '{score: 0, breakdown: {}}' | python3 - "$OBSERVATIONS_FILE" "$(json_file)" << 'PYEOF'
+    python3 - "$OBSERVATIONS_FILE" "$(json_file)" << 'PYEOF'
 import sys, re, json
 
 obs_file = sys.argv[1]
@@ -208,13 +193,24 @@ lines = content.split('\n')
 score = 0
 breakdown = {}
 
+# Detect observation format: Phase 1 (plain bullets) or Phase 2 (emoji-prefixed)
+obs_lines_phased = [l for l in lines if re.match(r'\s*-\s*[🔴🟡🟢]', l)]
+obs_lines_plain = [l for l in lines if re.match(r'\s*-\s+', l) and not re.match(r'\s*-\s*\[', l) and not re.match(r'\s*-.*\w+:', l)]
+content_lines = [l for l in lines if re.match(r'\s*-\s+[A-Za-z\u2000-\uFFFF]', l)]
+total_obs = len(content_lines)
+
 # 1. Type metadata ratio (0-25 points)
-obs_lines = [l for l in lines if re.match(r'\s*-\s*[🔴🟡🟢]', l)]
-total_obs = len(obs_lines)
-meta_lines = [l for l in obs_lines if 'dc:type=' in l]
+meta_lines = [l for l in content_lines if 'dc:type=' in l]
 meta_ratio = len(meta_lines) / max(total_obs, 1)
 score += int(meta_ratio * 25)
-breakdown['type_metadata'] = {"score": int(meta_ratio * 25), "max": 25, "ratio": round(meta_ratio, 2), "tagged": len(meta_lines), "total": total_obs}
+breakdown['type_metadata'] = {
+    "score": int(meta_ratio * 25),
+    "max": 25,
+    "ratio": round(meta_ratio, 2),
+    "tagged": len(meta_lines),
+    "total": total_obs,
+    "format": "phase2" if obs_lines_phased else "phase1",
+}
 
 # 2. Type diversity (0-20 points)
 known_types = {'fact', 'preference', 'goal', 'habit', 'event', 'rule', 'context'}
@@ -225,7 +221,7 @@ score += int(diversity * 20)
 breakdown['type_diversity'] = {"score": int(diversity * 20), "max": 20, "types_found": sorted(list(found_known))}
 
 # 3. Importance distribution balance (0-20 points)
-importances = [float(m) for m in re.findall(r'dc:importance=([\d.]+)', content)]
+importances = [float(m) for m in re.findall(r'dc:importance=(\d[\d.]*)', content)]
 if importances:
     avg_imp = sum(importances) / len(importances)
     has_high = any(i >= 7.0 for i in importances)
@@ -236,7 +232,14 @@ if importances:
 else:
     spread_score = 0
 score += spread_score
-breakdown['importance_balance'] = {"score": spread_score, "max": 20, "avg_importance": round(avg_imp, 2) if importances else None, "has_high": has_high if importances else False, "has_low": has_low if importances else False, "has_mid": has_mid if importances else False}
+breakdown['importance_balance'] = {
+    "score": spread_score,
+    "max": 20,
+    "avg_importance": round(avg_imp, 2) if importances else None,
+    "has_high": has_high if importances else False,
+    "has_low": has_low if importances else False,
+    "has_mid": has_mid if importances else False,
+}
 
 # 4. Word count vs target (0-15 points)
 word_count = len(content.split())
@@ -252,9 +255,10 @@ breakdown['size_appropriate'] = {"score": wc_score, "max": 15, "word_count": wor
 
 # 5. Content quality — non-trivial observations (0-20 points)
 non_trivial = 0
-for ol in obs_lines:
+for ol in content_lines:
     body = re.sub(r'\*\*.*?\*\*', '', ol)
     body = re.sub(r'^\s*-\s*[🔴🟡🟢]\s*\d{2}:\d{2}\s*', '', body)
+    body = re.sub(r'^\s*-\s*', '', body)
     if len(body.strip()) > 15:
         non_trivial += 1
 non_trivial_ratio = non_trivial / max(total_obs, 1)
@@ -265,14 +269,12 @@ breakdown['content_quality'] = {"score": nt_score, "max": 20, "non_trivial": non
 # 6. Structure integrity (0-20 points)
 has_header = 1 if '# Observations Log' in content or '# observations' in content.lower() else 0
 has_separator = 1 if '---' in content and (content.index('---') > content.find('\n') + 1) else 0
-has_obs_content = 1 if any(re.match(r'\s*-\s*[🔴🟡🟢]', l) for l in obs_lines) else 0
-
+has_obs_content = 1 if len(content_lines) > 0 else 0
 struct_score = int(((has_header + has_separator + has_obs_content) / 3) * 10)
-# Bonus for having section dates
 date_sections = len(re.findall(r'\n## .*', content))
 if date_sections > 0:
     struct_score = min(20, struct_score + 5)
-if len(obs_lines) > 5:
+if len(content_lines) > 5:
     struct_score = min(20, struct_score + 5)
 score += struct_score
 breakdown['structure'] = {"score": struct_score, "max": 20, "has_header": bool(has_header), "has_separator": bool(has_separator), "has_observations": bool(has_obs_content), "date_sections": date_sections}

@@ -19,7 +19,7 @@ TESTS_SKIPPED=0
 TEST_NUM=0
 
 for arg in "$@"; do
-    [[ "$arg" == "--no-cleanup" ]] && CLEANUP=false
+    if [[ "$arg" == "--no-cleanup" ]]; then CLEANUP=false; fi
 done
 
 OUT_DIR="$(cd "$SKILL_DIR/../.." && pwd)/memory/metrics"
@@ -83,7 +83,7 @@ test_empty_input() {
         record_result "$name" "fail" "non-zero exit"
     fi
 
-    $CLEANUP && rm -rf "$tmp_workspace" "$tmp_sessions"
+    if $CLEANUP; then rm -rf "$tmp_workspace" "$tmp_sessions"; fi
 }
 
 # ─── Test: Observer dedup — running twice on same input produces no new obs ──
@@ -139,7 +139,7 @@ test_dedup() {
         record_result "$name" "fail" "growth=${growth}%"
     fi
 
-    $CLEANUP && rm -rf "$tmp_workspace" "$tmp_sessions"
+    if $CLEANUP; then rm -rf "$tmp_workspace" "$tmp_sessions"; fi
 }
 
 # ─── Test: Flush mode exists and produces output ─────────────────────────────
@@ -167,7 +167,7 @@ test_flush_mode() {
     ok "$name — flush mode runs without crash"
     record_result "$name" "pass"
 
-    $CLEANUP && rm -rf "$tmp_workspace" "$tmp_sessions"
+    if $CLEANUP; then rm -rf "$tmp_workspace" "$tmp_sessions"; fi
 }
 
 # ─── Test: Large session — observer handles 150+ messages ────────────────────
@@ -209,7 +209,7 @@ test_large_session() {
         record_result "$name" "fail" "lines=$line_count"
     fi
 
-    $CLEANUP && rm -rf "$tmp_workspace" "$tmp_sessions"
+    if $CLEANUP; then rm -rf "$tmp_workspace" "$tmp_sessions"; fi
 }
 
 # ─── Test: Session recovery detects and fires on missed session ──────────────
@@ -250,7 +250,7 @@ test_recovery_mode() {
         record_result "$name" "fail" "output: $(echo "$output" | head -c 200)"
     fi
 
-    $CLEANUP && rm -rf "$tmp_workspace" "$tmp_sessions"
+    if $CLEANUP; then rm -rf "$tmp_workspace" "$tmp_sessions"; fi
 }
 
 # ─── Test: Metrics infrastructure integration ────────────────────────────────
@@ -289,7 +289,7 @@ test_metrics_integration() {
         record_result "$name" "fail" "file missing: $metric_file"
     fi
 
-    $CLEANUP && rm -rf "$tmp_workspace" "$tmp_sessions"
+    if $CLEANUP; then rm -rf "$tmp_workspace" "$tmp_sessions"; fi
 }
 
 # ─── Run all tests ───────────────────────────────────────────────────────────
